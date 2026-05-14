@@ -122,10 +122,20 @@ function load(){
 
 // ── Réinitialisation complète ──
 function resetAll(){
-  if(!confirm('⚠️ Supprimer TOUTES les données ? Cette action est irréversible.')) return;
+  if(!confirm('⚠️ Supprimer TOUTES les données (éducateurs, plages, horaires) ?\nCette action est irréversible.')) return;
   ['planeduc_v3_config','planeduc_v3_mois'].forEach(k=>localStorage.removeItem(k));
   Object.keys(localStorage).filter(k=>k.startsWith('planeduc_v3_h_')).forEach(k=>localStorage.removeItem(k));
   localStorage.removeItem('planeduc_v3');
+  location.reload();
+}
+
+// ── Réinitialisation des horaires seulement (garde éducs et plages) ──
+function resetHoraires(){
+  if(!confirm('⚠️ Supprimer TOUS les horaires générés ?\n(Les éducateurs, plages et règles sont conservés)')) return;
+  Object.keys(localStorage).filter(k=>k.startsWith('planeduc_v3_h_')).forEach(k=>localStorage.removeItem(k));
+  localStorage.removeItem('planeduc_v3_mois');
+  horaire = {};
+  save();
   location.reload();
 }
 

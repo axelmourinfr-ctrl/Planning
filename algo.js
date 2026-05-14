@@ -113,7 +113,8 @@ async function genMois(moisStr, L){
       const ds = dayStr(day);
       const weDay = isWE(day);
       Object.entries(plan[ds]||{}).forEach(([pid,ids])=>{
-        if(pid==='_status') return;
+        if(pid.startsWith('_')) return; // ignorer clés de statut
+        if(!Array.isArray(ids)) return;
         const p = plages.find(x=>x.id===+pid); if(!p) return;
         ids.forEach(eid=>{
           const id = +eid;
@@ -132,10 +133,13 @@ async function genMois(moisStr, L){
   const prevKey  = moisKey(yr, mo-1);
   const prevPlan = horaire[prevKey] || {};
   Object.entries(prevPlan).sort().forEach(([date, slots])=>{
-    const d = new Date(date);
+    // Utiliser T12:00 pour éviter le bug de fuseau horaire belge
+    const d = new Date(date + 'T12:00');
     if(d.getDay()===0 || d.getDay()===6){
       Object.entries(slots).forEach(([pid,ids])=>{
-        if(pid==='_status') return;
+        // Ignorer les clés de statut (_s_...) et autres métadonnées
+        if(pid.startsWith('_')) return;
+        if(!Array.isArray(ids)) return;
         ids.forEach(eid => { lastWEWorked[+eid] = date; });
       });
     }

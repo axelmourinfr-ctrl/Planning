@@ -28,7 +28,8 @@
   <div class="nav-sec">Données</div>
   <div class="nav-item" onclick="exportData()"><span>💾</span> Exporter JSON</div>
   <div class="nav-item" onclick="document.getElementById('imp').click()"><span>📂</span> Importer JSON</div>
-  <div class="nav-item" onclick="resetAll()" style="color:#f08080"><span>🗑️</span> Réinitialiser</div>
+  <div class="nav-item" onclick="resetHoraires()" style="color:#f0a060"><span>🗓️</span> Effacer les horaires</div>
+  <div class="nav-item" onclick="resetAll()" style="color:#f08080"><span>🗑️</span> Tout réinitialiser</div>
   <input type="file" id="imp" accept=".json" style="display:none" onchange="importData(event)">
   <div class="nav-bottom">Sauvegarde auto · localStorage</div>
 </aside>
