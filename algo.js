@@ -86,9 +86,19 @@ async function genMois(moisStr, L){
   const isNuit = p => p.type==='nuit' || p.debut>='22:00' || (p.fin<='07:00' && p.fin>'00:00');
   const isWE   = d => d.getDay()===0 || d.getDay()===6;
 
-  // ── Quota mensuel cible par éduc ──
+  // ── Quota mensuel réel : jours travail de l'éduc dans CE mois × 7.6h ──
+  // Base légale belge : 1 jour ouvrable = 7.6h (38h/5j)
+  const H_PAR_JOUR = 7.6;
   const quotaMois = {};
-  educs.forEach(e => { quotaMois[e.id] = getTargetH(e) * 4.33; });
+  educs.forEach(e=>{
+    // Ratio selon contrat (mi-temps = 0.5, 4/5 = 0.8, etc.)
+    const ratio = getTargetH(e) / 38;
+    const joursEduc = jours.filter(d=>{
+      const dow = d.getDay()===0 ? 6 : d.getDay()-1;
+      return (e.jours||[]).includes(dow);
+    });
+    quotaMois[e.id] = joursEduc.length * H_PAR_JOUR * ratio;
+  });
 
   // ── Cumul heures + plages + WE sur les mois précédents ──
   const cumH = {}, cumPlage = {}, cumWE = {};
@@ -281,14 +291,20 @@ async function genMois(moisStr, L){
       const assigned = scored.slice(0,n).map(x=>x.e);
       planning[ds][plage.id] = assigned.map(e=>e.id);
 
-      // ── Statut demandes éducs ──
-      if(!planning[ds]._status) planning[ds]._status = {};
+      // ── Statut demandes éducs — stocké dans une clé séparée _s_ pour éviter conflit avec IDs ──
       assigned.forEach(e=>{
-        const isPref = (e.prefs||[]).includes(plage.id);
-        const isExcl = (e.excls||[]).includes(plage.id);
-        const key    = `${e.id}_${plage.id}`;
-        planning[ds]._status[key] = isExcl ? 'forced' : isPref ? 'pref' : 'neutral';
-        if(isExcl) warnings.push(`${ds} · ${plage.nom} : demande de ${e.prenom} ${e.nom} non respectée`);
+        const isPref   = (e.prefs||[]).includes(plage.id);
+        const isExcl   = (e.excls||[]).includes(plage.id);
+        const notAsked = !isPref && !isExcl; // ni préféré ni refusé = neutre
+        const statusKey = `_s_${e.id}_${plage.id}`;
+        if(isExcl){
+          planning[ds][statusKey] = 'forced';
+          warnings.push(`${ds} · ${plage.nom} : plage refusée assignée à ${e.prenom} ${e.nom}`);
+        } else if(isPref){
+          planning[ds][statusKey] = 'pref';
+        } else {
+          planning[ds][statusKey] = 'neutral';
+        }
       });
 
       if(assigned.length < reqMin)

@@ -31,10 +31,19 @@ function renderSoldes(){
   }
 
   const cards = educs.map(e=>{
-    let totalTrav = 0;
-    const targetPerMois = getTargetH(e) * 4.33;
+    let totalTrav   = 0;
+    let targetTotal = 0;
+
     moisDispo.forEach(({key, yr:ky, mo:km})=>{
       const plan = horaire[key];
+      // Cible réelle : jours travaillés × 7.6h × ratio contrat
+      const ratio = getTargetH(e) / 38;
+      const joursEduc = getDays(ky,km).filter(day=>{
+        const dow = day.getDay()===0 ? 6 : day.getDay()-1;
+        return (e.jours||[]).includes(dow) && !isAbsent(e.id, dayStr(day));
+      });
+      targetTotal += joursEduc.length * 7.6 * ratio;
+
       getDays(ky,km).forEach(day=>{
         const ds = dayStr(day);
         if(isAbsent(e.id,ds)) return;
@@ -44,7 +53,6 @@ function renderSoldes(){
         });
       });
     });
-    const targetTotal = targetPerMois * moisDispo.length;
     const solde       = totalTrav - targetTotal;
     const tol         = getRule('tol_heures', 15);
     const ok          = Math.abs(solde) <= tol;
