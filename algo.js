@@ -100,20 +100,24 @@ async function genMois(moisStr, L){
     quotaMois[e.id] = joursOuvrables.length * H_PAR_JOUR * ratio;
   });
 
-  // ── Cumul heures + plages + WE sur les mois précédents ──
-  const cumH = {}, cumPlage = {}, cumWE = {};
-  educs.forEach(e => { cumH[e.id]=0; cumPlage[e.id]={}; cumWE[e.id]=0; });
+  // ── Cumul heures + plages + WE + SOLDE RÉEL sur les mois précédents ──
+  const cumH = {}, cumPlage = {}, cumWE = {}, soldeReel = {};
+  educs.forEach(e => { cumH[e.id]=0; cumPlage[e.id]={}; cumWE[e.id]=0; soldeReel[e.id]=0; });
 
   for(let i=1; i<horizon; i++){
     const key  = moisKey(yr, mo-i);
     const plan = horaire[key];
     if(!plan) continue;
     const [ky,km] = key.split('-').map(Number);
+
+    // Calculer la cible réelle de ce mois passé pour chaque éduc
+    const joursMois = getDays(ky,km);
+
     getDays(ky,km).forEach(day=>{
       const ds = dayStr(day);
       const weDay = isWE(day);
       Object.entries(plan[ds]||{}).forEach(([pid,ids])=>{
-        if(pid.startsWith('_')) return; // ignorer clés de statut
+        if(pid.startsWith('_')) return;
         if(!Array.isArray(ids)) return;
         const p = plages.find(x=>x.id===+pid); if(!p) return;
         ids.forEach(eid=>{
@@ -124,6 +128,27 @@ async function genMois(moisStr, L){
           if(weDay) cumWE[id] = (cumWE[id]||0)+1;
         });
       });
+    });
+
+    // Calculer le solde de ce mois : heures travaillées - cible du mois
+    educs.forEach(e=>{
+      const ratio = getTargetH(e) / 38;
+      const joursOuvr = joursMois.filter(d=>{
+        const dow = d.getDay();
+        return dow>=1 && dow<=5 && !isFerie(dayStr(d));
+      });
+      const cibleMois = joursOuvr.length * 7.6 * ratio;
+      // Heures travaillées ce mois-là
+      let hMois = 0;
+      getDays(ky,km).forEach(day=>{
+        const ds = dayStr(day);
+        Object.entries(plan[ds]||{}).forEach(([pid,ids])=>{
+          if(pid.startsWith('_') || !Array.isArray(ids)) return;
+          const p = plages.find(x=>x.id===+pid); if(!p) return;
+          if(ids.map(x=>+x).includes(e.id)) hMois += p.dureeH;
+        });
+      });
+      soldeReel[e.id] = (soldeReel[e.id]||0) + (hMois - cibleMois);
     });
   }
 
@@ -199,8 +224,12 @@ async function genMois(moisStr, L){
     }
     // CONVENTION — seulement en mode strict
     if(strict){
-      if(isWE(d) && t.weCount >= maxWe)         return false;
-      if(t.h >= quotaMois[e.id] * 1.1)          return false; // quota mensuel +10%
+      if(isWE(d) && t.weCount >= maxWe) return false;
+      // Cap adaptatif : si l'éduc est en déficit, il peut dépasser un peu son quota ce mois
+      // Si en excédent, il est bloqué plus tôt
+      const solde = soldeReel[e.id] || 0;
+      const facteur = solde < -10 ? 1.2 : solde > 10 ? 0.95 : 1.05;
+      if(t.h >= quotaMois[e.id] * facteur) return false;
     }
     return true;
   }
@@ -210,20 +239,22 @@ async function genMois(moisStr, L){
     const t = tracker[e.id];
     let sc = 0;
 
-    // Équité heures ce mois vs quota
-    sc += (t.h / Math.max(1, quotaMois[e.id])) * 50;
+    // ── PRIORITÉ 1 : Rattraper le solde cumulé des mois précédents ──
+    // Si l'éduc est en déficit → fort bonus (score bas = prioritaire)
+    // Si l'éduc est en excédent → fort malus (score haut = moins prioritaire)
+    const solde = soldeReel[e.id] || 0;
+    sc += (-solde) * 1.5; // déficit de -15h → bonus de +22.5 pts de priorité
 
-    // Équité sur l'horizon (mois précédents)
-    const totalHCum = (cumH[e.id]||0) + t.h;
-    sc += (totalHCum / Math.max(1, quotaMois[e.id]*horizon)) * 20;
+    // ── PRIORITÉ 2 : Équité heures ce mois vs quota ──
+    sc += (t.h / Math.max(1, quotaMois[e.id])) * 40;
 
     // Cycle fixe par jour/plage
     sc += getCycleScore(e, d.getDay()===0?6:d.getDay()-1, plage);
 
-    // Équité type de plage
+    // Équité type de plage sur l'historique
     const myCount  = (cumPlage[e.id]?.[plage.id]||0) + (t.plageCount[plage.id]||0);
     const avgCount = educs.reduce((s,x)=>s+((cumPlage[x.id]?.[plage.id]||0)+(tracker[x.id]?.plageCount[plage.id]||0)),0) / Math.max(1,educs.length);
-    sc += (myCount - avgCount) * 6;
+    sc += (myCount - avgCount) * 5;
 
     // WE / fériés
     if(weOrFerie){
