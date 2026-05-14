@@ -86,18 +86,18 @@ async function genMois(moisStr, L){
   const isNuit = p => p.type==='nuit' || p.debut>='22:00' || (p.fin<='07:00' && p.fin>'00:00');
   const isWE   = d => d.getDay()===0 || d.getDay()===6;
 
-  // ── Quota mensuel réel : jours travail de l'éduc dans CE mois × 7.6h ──
-  // Base légale belge : 1 jour ouvrable = 7.6h (38h/5j)
+  // ── Quota mensuel réel : jours ouvrables - fériés actifs × 7.6h × ratio ──
   const H_PAR_JOUR = 7.6;
   const quotaMois = {};
   educs.forEach(e=>{
-    // Ratio selon contrat (mi-temps = 0.5, 4/5 = 0.8, etc.)
     const ratio = getTargetH(e) / 38;
-    const joursEduc = jours.filter(d=>{
-      const dow = d.getDay()===0 ? 6 : d.getDay()-1;
-      return (e.jours||[]).includes(dow);
+    const joursOuvrables = jours.filter(d=>{
+      const dow = d.getDay();
+      if(dow < 1 || dow > 5) return false; // exclure sam/dim
+      if(isFerie(dayStr(d))) return false;  // exclure jours fériés actifs
+      return true;
     });
-    quotaMois[e.id] = joursEduc.length * H_PAR_JOUR * ratio;
+    quotaMois[e.id] = joursOuvrables.length * H_PAR_JOUR * ratio;
   });
 
   // ── Cumul heures + plages + WE sur les mois précédents ──

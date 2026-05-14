@@ -36,13 +36,15 @@ function renderSoldes(){
 
     moisDispo.forEach(({key, yr:ky, mo:km})=>{
       const plan = horaire[key];
-      // Cible réelle : jours travaillés × 7.6h × ratio contrat
+      // Cible réelle : jours ouvrables (lun-ven) hors fériés actifs × 7.6h × ratio
       const ratio = getTargetH(e) / 38;
-      const joursEduc = getDays(ky,km).filter(day=>{
-        const dow = day.getDay()===0 ? 6 : day.getDay()-1;
-        return (e.jours||[]).includes(dow) && !isAbsent(e.id, dayStr(day));
+      const joursOuvrables = getDays(ky,km).filter(day=>{
+        const dow = day.getDay();
+        if(dow < 1 || dow > 5) return false;
+        if(isFerie(dayStr(day))) return false;
+        return true;
       });
-      targetTotal += joursEduc.length * 7.6 * ratio;
+      targetTotal += joursOuvrables.length * 7.6 * ratio;
 
       getDays(ky,km).forEach(day=>{
         const ds = dayStr(day);
