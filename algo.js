@@ -312,17 +312,21 @@ async function genMois(moisStr, L){
     for(const plage of pj){
       const nuit   = isNuit(plage);
       const reqMin = Math.max(0, +plage.min || 1);
+      const reqMax = Math.max(reqMin, +plage.max || reqMin);
       const useAll = plage.tous;
 
       // Passe 1 : toutes les règles
       let cands = educs.filter(e => canWork(e,d,ds,dow,plage,true));
-      // Passe 2 : loi seulement si pas assez (convention assouplie, JAMAIS la loi)
+      // Passe 2 : si pas assez pour le minimum → relâcher convention (jamais la loi)
       if(cands.length < reqMin && !useAll){
         cands = educs.filter(e => canWork(e,d,ds,dow,plage,false));
       }
 
-      const scored   = cands.map(e=>({e, sc:score(e,d,ds,plage,we||ferie)})).sort((a,b)=>a.sc-b.sc);
-      const n        = useAll ? cands.length : reqMin;
+      const scored = cands.map(e=>({e, sc:score(e,d,ds,plage,we||ferie)})).sort((a,b)=>a.sc-b.sc);
+
+      // Assigner jusqu'au maximum si les candidats sont disponibles
+      // "tous" = tous les dispo, sinon entre min et max selon disponibilité
+      const n = useAll ? cands.length : Math.min(reqMax, scored.length);
       const assigned = scored.slice(0,n).map(x=>x.e);
       planning[ds][plage.id] = assigned.map(e=>e.id);
 
