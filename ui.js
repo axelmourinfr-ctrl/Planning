@@ -102,12 +102,13 @@ function renderDemandesForm(demandes){
 }
 
 function resetEducForm(){
-  document.getElementById('me-id').value = '';
-  document.getElementById('me-title').textContent = 'Nouvel éducateur';
-  ['me-prenom','me-nom','me-notes'].forEach(id=>document.getElementById(id).value='');
-  document.getElementById('me-contrat').value = 'temps-plein';
-  document.getElementById('me-heures').value = '';
-  document.getElementById('me-h-field').style.display = 'none';
+  var g=function(id){return document.getElementById(id);};
+  if(g('me-id'))      g('me-id').value='';
+  if(g('me-title'))   g('me-title').textContent='Nouvel éducateur';
+  ['me-prenom','me-nom','me-notes'].forEach(function(id){var el=g(id);if(el)el.value='';});
+  if(g('me-contrat')) g('me-contrat').value='temps-plein';
+  if(g('me-heures'))  g('me-heures').value='';
+  if(g('me-h-field')) g('me-h-field').style.display='none';
   const pEl=document.getElementById('me-pause'); if(pEl) pEl.checked=false;
   document.querySelectorAll('#me-jours-grp .chk-pill').forEach((p,i)=>{
     const cb = p.querySelector('input');
