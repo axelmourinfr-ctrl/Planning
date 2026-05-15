@@ -167,12 +167,13 @@ function saveEduc(){
   const jours      = [...document.querySelectorAll('#me-jours-grp input:checked')].map(c=>+c.value);
   const prefs      = [...document.querySelectorAll('.ep:checked')].map(c=>+c.value);
   const excls      = [...document.querySelectorAll('.ee:checked')].map(c=>+c.value);
-  const contrat     = document.getElementById('me-contrat').value;
-  const heuresPerso = +document.getElementById('me-heures').value || null;
-  const pauseEl2    = document.getElementById('me-pause');
+  var g2=function(id){return document.getElementById(id);};
+  const contrat     = g2('me-contrat') ? g2('me-contrat').value : 'temps-plein';
+  const heuresPerso = g2('me-heures')  ? (+g2('me-heures').value || null) : null;
+  const pauseEl2    = g2('me-pause');
   const acceptePause= pauseEl2 ? pauseEl2.checked : false;
-  const notes      = document.getElementById('me-notes').value.trim();
-  const editId     = +document.getElementById('me-id').value || null;
+  const notes       = g2('me-notes')   ? g2('me-notes').value.trim() : '';
+  const editId      = g2('me-id')      ? (+g2('me-id').value || null) : null;
 
   // Lire les demandes structurées (max 2) - un jour + plusieurs plages
   const demandes = [];
