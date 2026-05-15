@@ -160,16 +160,17 @@ function openEditEduc(id){
 }
 
 function saveEduc(){
-  const prenom = document.getElementById('me-prenom').value.trim();
-  const nom    = document.getElementById('me-nom').value.trim();
+  var g = function(id){ return document.getElementById(id); };
+  const prenom = (g('me-prenom')||{value:''}).value.trim();
+  const nom    = (g('me-nom')||{value:''}).value.trim();
   if(!prenom||!nom){ alert('Prénom et nom requis.'); return; }
   const jours      = [...document.querySelectorAll('#me-jours-grp input:checked')].map(c=>+c.value);
   const prefs      = [...document.querySelectorAll('.ep:checked')].map(c=>+c.value);
   const excls      = [...document.querySelectorAll('.ee:checked')].map(c=>+c.value);
-  const contrat    = document.getElementById('me-contrat').value;
-  const heuresPerso = +document.getElementById('me-heures').value || null;
-  const notes      = document.getElementById('me-notes').value.trim();
-  const editId     = +document.getElementById('me-id').value || null;
+  const contrat    = g('me-contrat') ? g('me-contrat').value : 'temps-plein';
+  const heuresPerso = g('me-heures') ? (+g('me-heures').value || null) : null;
+  const notes      = g('me-notes') ? g('me-notes').value.trim() : '';
+  const editId     = g('me-id') ? (+g('me-id').value || null) : null;
 
   // Lire les demandes structurées (max 2) - un jour + plusieurs plages
   const demandes = [];
