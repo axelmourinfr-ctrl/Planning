@@ -176,12 +176,15 @@ function saveEduc(){
 
   // Lire les demandes structurées (max 2) - un jour + plusieurs plages
   const demandes = [];
-  [1,2].forEach(i=>{
-    const jour    = +document.getElementById(`me-dem-jour-${i}`).value;
-    const type    = document.getElementById(`me-dem-type-${i}`).value;
-    const plageIds = [...document.querySelectorAll(`.dem-plage-${i}:checked`)].map(c=>+c.value);
+  [1,2].forEach(function(i){
+    var jourEl = document.getElementById('me-dem-jour-'+i);
+    var typeEl = document.getElementById('me-dem-type-'+i);
+    if(!jourEl || !typeEl) return;
+    var jour = +jourEl.value;
+    var type = typeEl.value;
+    var plageIds = [...document.querySelectorAll('.dem-plage-'+i+':checked')].map(function(c){return +c.value;});
     if(!isNaN(jour) && jour !== -1 && plageIds.length > 0){
-      demandes.push({jour, type, plageIds});
+      demandes.push({jour:jour, type:type, plageIds:plageIds});
     }
   });
 
