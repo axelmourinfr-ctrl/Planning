@@ -212,6 +212,16 @@ async function genMois(moisStr, L){
     }
     if(isNuit(plage)) sc+=t.nuits*7;
     if((e.prefs||[]).includes(plage.id)) sc-=15;
+
+    // Demandes structurées : eviter ce jour+plage = malus, prefere = bonus
+    const dowCheck = d.getDay()===0?6:d.getDay()-1;
+    (e.demandes||[]).forEach(dem=>{
+      if(dem.jour===dowCheck && (dem.plageIds||[]).includes(plage.id)){
+        if(dem.type==='eviter')  sc+=20;
+        if(dem.type==='prefere') sc-=20;
+      }
+    });
+
     if(Object.values(planning[ds]||{}).some(ids=>Array.isArray(ids)&&ids.includes(e.id))) sc+=10;
     return sc;
   }
@@ -252,10 +262,22 @@ async function genMois(moisStr, L){
       assigned.forEach(e=>{
         const isPref=(e.prefs||[]).includes(plage.id);
         const isExcl=(e.excls||[]).includes(plage.id);
+        const dowCheck=d.getDay()===0?6:d.getDay()-1;
+        const dem=(e.demandes||[]).find(x=>x.jour===dowCheck&&(x.plageIds||[]).includes(plage.id));
         const sk=`_s_${e.id}_${plage.id}`;
-        if(isExcl){planning[ds][sk]='forced';warnings.push(`${ds} - ${plage.nom} : plage refusee assignee a ${e.prenom}`);}
-        else if(isPref) planning[ds][sk]='pref';
-        else planning[ds][sk]='neutral';
+        if(isExcl){
+          planning[ds][sk]='forced';
+          warnings.push(`${ds} - ${plage.nom} : plage refusee assignee a ${e.prenom}`);
+        } else if(dem&&dem.type==='eviter'){
+          planning[ds][sk]='dem_evite'; // demande "eviter" non respectee
+          warnings.push(`${ds} - ${plage.nom} : demande d'${e.prenom} non respectee (prefere eviter ce jour)`);
+        } else if(dem&&dem.type==='prefere'){
+          planning[ds][sk]='dem_pref'; // demande "prefere" respectee
+        } else if(isPref){
+          planning[ds][sk]='pref';
+        } else {
+          planning[ds][sk]='neutral';
+        }
         updateTracker(e,d,ds,plage,nuit,we);
       });
       if(assigned.length<reqMin) warnings.push(`${ds} - ${plage.nom} : ${reqMin-assigned.length} poste(s) vide(s)`);

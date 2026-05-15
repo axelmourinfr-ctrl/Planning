@@ -69,18 +69,21 @@ function renderHoraire(){
   document.getElementById('hor-alerts').innerHTML = totalM>0
     ? `<div class="alert a-warn">⚠️ ${totalM} poste(s) non couvert(s) ce mois.</div>` : '';
 
-  // Légende + comptage demandes non respectées
+  // Légende + comptage demandes non respectées (clés _s_educId_plageId)
   let forcedCount = 0;
   Object.values(plan).forEach(daySlots=>{
-    const st = daySlots._status || {};
-    forcedCount += Object.values(st).filter(s=>s==='forced').length;
+    Object.entries(daySlots).forEach(([k,v])=>{
+      if(k.startsWith('_s_') && (v==='forced'||v==='dem_evite')) forcedCount++;
+    });
   });
+
   document.getElementById('hor-legend').innerHTML = `
     <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:.75rem;margin-bottom:12px;padding:9px 14px;background:var(--surface);border:1px solid var(--border);border-radius:8px">
       <strong>Légende :</strong>
       <span><span style="display:inline-block;width:40px;height:16px;border-radius:4px;background:#2a5fc8;vertical-align:middle"></span> Préférence respectée</span>
       <span><span style="display:inline-block;width:40px;height:16px;border-radius:4px;background:#2a5fc818;border:1px solid #2a5fc833;vertical-align:middle"></span> Neutre</span>
-      <span><span style="display:inline-block;width:40px;height:16px;border-radius:4px;background:#fdeaea;border:1.5px solid #f0b3b3;vertical-align:middle;color:#c02a2a;font-size:.65rem;text-align:center">✗</span> Demande non respectée</span>
+      <span><span style="display:inline-block;width:40px;height:16px;border-radius:4px;background:#fdf3e0;border:1.5px solid #f0c878;vertical-align:middle;color:#d4800a;font-size:.65rem;text-align:center">⚠️</span> Demande à éviter non respectée</span>
+      <span><span style="display:inline-block;width:40px;height:16px;border-radius:4px;background:#fdeaea;border:1.5px solid #f0b3b3;vertical-align:middle;color:#c02a2a;font-size:.65rem;text-align:center">✗</span> Plage refusée assignée</span>
       <span class="badge ${forcedCount>0?'b-red':'b-green'}" style="margin-left:auto">
         ${forcedCount>0?`⚠️ ${forcedCount} demande(s) non respectée(s)`:'✅ Toutes les demandes respectées'}
       </span>
@@ -121,19 +124,25 @@ function renderHoraire(){
         return;
       }
       const ids    = ((plan[ds]||{})[p.id]||[]).map(x=>+x);
-      const status = (plan[ds]||{})._status || {};
+      // Lire les statuts depuis les clés _s_educId_plageId
       const absHere = educs.filter(e=>isAbsent(e.id,ds)&&(e.jours||[]).includes(dowIdx)&&!((e.excls||[]).includes(p.id)));
 
       let chips = ids.map(id=>{
         const e  = educs.find(x=>x.id===id); if(!e) return '';
-        const st = status[`${id}_${p.id}`] || 'neutral';
+        const statusKey = `_s_${id}_${p.id}`;
+        const st = (plan[ds]||{})[statusKey] || 'neutral';
         let style, icon='', title='';
         if(st==='forced'){
           style = `background:#fdeaea;color:#c02a2a;border:1.5px solid #f0b3b3`;
           icon  = '✗ ';
-          title = `title="⚠️ ${e.prenom} avait refusé cette plage"`;
-        } else if(st==='pref'){
+          title = `title="Plage refusée assignée à ${e.prenom}"`;
+        } else if(st==='dem_evite'){
+          style = `background:#fdf3e0;color:#d4800a;border:1.5px solid #f0c878`;
+          icon  = '⚠️ ';
+          title = `title="${e.prenom} préférait éviter cette plage ce jour"`;
+        } else if(st==='dem_pref'||st==='pref'){
           style = `background:${e.color};color:#fff;border:1px solid ${e.color}`;
+          title = `title="Préférence respectée"`;
         } else {
           style = `background:${e.color}18;color:${e.color};border:1px solid ${e.color}33`;
         }

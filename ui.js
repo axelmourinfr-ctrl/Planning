@@ -80,6 +80,28 @@ function showAlert(id, t, m){
 // ================================================================
 // ÉDUCATEURS
 // ================================================================
+function renderDemandesForm(demandes){
+  demandes = demandes || [];
+  [1,2].forEach(i=>{
+    const dem = demandes[i-1] || {};
+    const jourSel = document.getElementById(`me-dem-jour-${i}`);
+    const typeSel = document.getElementById(`me-dem-type-${i}`);
+    const plagesGrp = document.getElementById(`me-dem-plages-${i}`);
+    if(!jourSel) return;
+    jourSel.value = dem.jour !== undefined ? dem.jour : -1;
+    if(typeSel) typeSel.value = dem.type || 'eviter';
+    // Plages sous forme de checkboxes
+    if(plagesGrp){
+      plagesGrp.innerHTML = plages.map(p=>{
+        const checked = (dem.plageIds||[]).includes(p.id);
+        return `<label class="chk-pill ${checked?'on':''}" onclick="togglePill(this)">
+          <input type="checkbox" class="dem-plage-${i}" value="${p.id}" ${checked?'checked':''}>${p.nom}
+        </label>`;
+      }).join('');
+    }
+  });
+}
+
 function resetEducForm(){
   document.getElementById('me-id').value = '';
   document.getElementById('me-title').textContent = 'Nouvel éducateur';
@@ -93,6 +115,7 @@ function resetEducForm(){
     p.classList.toggle('on', cb.checked);
   });
   renderPlageCheckboxes([],[]);
+  renderDemandesForm([]);
 }
 
 function renderPlageCheckboxes(prefs, excls){
@@ -129,6 +152,7 @@ function openEditEduc(id){
     p.classList.toggle('on', cb.checked);
   });
   renderPlageCheckboxes(e.prefs||[], e.excls||[]);
+  renderDemandesForm(e.demandes||[]);
   openModal('modal-educ', null);
 }
 
@@ -144,11 +168,22 @@ function saveEduc(){
   const notes      = document.getElementById('me-notes').value.trim();
   const editId     = +document.getElementById('me-id').value || null;
 
+  // Lire les demandes structurées (max 2) - un jour + plusieurs plages
+  const demandes = [];
+  [1,2].forEach(i=>{
+    const jour    = +document.getElementById(`me-dem-jour-${i}`).value;
+    const type    = document.getElementById(`me-dem-type-${i}`).value;
+    const plageIds = [...document.querySelectorAll(`.dem-plage-${i}:checked`)].map(c=>+c.value);
+    if(!isNaN(jour) && jour !== -1 && plageIds.length > 0){
+      demandes.push({jour, type, plageIds});
+    }
+  });
+
   if(editId){
     const idx = educs.findIndex(e=>e.id===editId);
-    if(idx>=0) educs[idx] = {...educs[idx], prenom, nom, contrat, heuresPerso, jours, prefs, excls, notes};
+    if(idx>=0) educs[idx] = {...educs[idx], prenom, nom, contrat, heuresPerso, jours, prefs, excls, notes, demandes};
   } else {
-    educs.push({id:Date.now(), prenom, nom, contrat, heuresPerso, jours, prefs, excls, notes, color:COLORS[educs.length%COLORS.length]});
+    educs.push({id:Date.now(), prenom, nom, contrat, heuresPerso, jours, prefs, excls, notes, demandes, color:COLORS[educs.length%COLORS.length]});
   }
   save(); renderAll(); closeModal('modal-educ');
 }
@@ -172,6 +207,13 @@ function renderEducGrid(){
     const jours = (e.jours||[]).map(j=>JOURS[j]).join(' ');
     const prefs = (e.prefs||[]).map(id=>{ const p=plages.find(x=>x.id===id); return p?`<span class="badge b-blue">${p.nom}</span>`:''; }).join('');
     const excls = (e.excls||[]).map(id=>{ const p=plages.find(x=>x.id===id); return p?`<span class="badge b-red">✗ ${p.nom}</span>`:''; }).join('');
+    const demandesHtml = (e.demandes||[]).map(d=>{
+      const plageNames = (d.plageIds||[]).map(id=>{ const p=plages.find(x=>x.id===id); return p?p.nom:''; }).filter(Boolean).join('+');
+      const jourLabel = JOURS[d.jour] !== undefined ? JOURS[d.jour] : '';
+      const icon = d.type==='prefere' ? '⭐' : '⚠️';
+      const color = d.type==='prefere' ? 'b-green' : 'b-orange';
+      return plageNames ? `<span class="badge ${color}">${icon} ${jourLabel} : ${plageNames}</span>` : '';
+    }).join('');
     return `<div class="educ-card">
       <div class="educ-top">
         <div class="avatar" style="background:${e.color||COLORS[0]}">${ini}</div>
@@ -184,7 +226,7 @@ function renderEducGrid(){
           <button class="btn btn-red btn-sm" onclick="delEduc(${e.id})">🗑️</button>
         </div>
       </div>
-      <div class="educ-tags">${prefs}${excls}</div>
+      <div class="educ-tags">${prefs}${excls}${demandesHtml}</div>
       ${e.notes?`<div style="font-size:.72rem;color:var(--ink3);margin-top:6px;font-style:italic">"${e.notes}"</div>`:''}
     </div>`;
   }).join('');
