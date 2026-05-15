@@ -38,6 +38,35 @@ function nav(el, page){
   if(page==='stats')    renderStats();
   if(page==='feries')   renderFeries();
   if(page==='absences') renderAbsList();
+  if(page==='diagnostic') renderDiagnostic();
+}
+
+// ── Diagnostic ──
+function renderDiagnostic(){
+  const el=document.getElementById('page-diagnostic'); if(!el) return;
+  const diag=window._lastDiagnostic||[];
+  if(!diag.length){
+    el.innerHTML=`<div class="page-title">🔍 Diagnostic génération</div><div class="page-sub">Aucun diagnostic disponible. Générez un horaire d'abord.</div><div class="empty"><div class="icon">🔍</div><p>Générez un horaire pour voir le diagnostic.</p></div>`;
+    return;
+  }
+  let html='<div class="page-title">🔍 Diagnostic génération</div>';
+  html+='<div class="page-sub">Détail des refus et contraintes lors de la dernière génération</div>';
+  diag.forEach(function(d){
+    html+='<div class="card" style="margin-bottom:10px">';
+    html+='<div class="card-hd"><div class="card-title">'+d.ds+' — '+d.plage+'</div>';
+    html+='<span class="badge '+(d.couverte?'b-green':'b-red')+'">'+(d.couverte?'✅ Couverte':'⚠ Non couverte')+'</span></div>';
+    html+='<div style="font-size:.78rem;margin-top:8px">';
+    d.details.forEach(function(r){
+      html+='<div style="display:flex;align-items:center;gap:8px;padding:3px 0;border-bottom:1px solid var(--border)">';
+      html+='<div class="avatar" style="background:'+r.color+';width:26px;height:26px;font-size:.65rem;flex-shrink:0">'+r.ini+'</div>';
+      html+='<span style="font-weight:600;min-width:100px">'+r.nom+'</span>';
+      var couleur=r.ok?'var(--green)':'var(--red)';
+      html+='<span style="color:'+couleur+'">'+(r.ok?'✅ Assigné':'❌ '+r.raison)+'</span>';
+      html+='</div>';
+    });
+    html+='</div></div>';
+  });
+  el.innerHTML=html;
 }
 
 // ── Onglets internes ──
