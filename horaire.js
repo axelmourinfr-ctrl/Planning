@@ -1,5 +1,5 @@
 // ============================================================
-// horaire.js — Affichage horaire mensuel, fiche individuelle
+// horaire.js - Affichage horaire mensuel, fiche individuelle
 // ============================================================
 
 // ── Navigation mois ──
@@ -120,7 +120,7 @@ function renderHoraire(){
       // Jours fériés : appliquer les plages WE
       const dowCheck = (ferie&&!we) ? 5 : dowIdx;
       if(!p.jours.includes(dowCheck)){
-        html += `<td class="${we||ferie?'we-bg':''}"><div class="empty-slot">—</div></td>`;
+        html += `<td class="${we||ferie?'we-bg':''}"><div class="empty-slot">-</div></td>`;
         return;
       }
       const ids    = ((plan[ds]||{})[p.id]||[]).map(x=>+x);
@@ -167,7 +167,7 @@ function renderHoraire(){
 function openCellEdit(ds, plageId){
   const p = plages.find(x=>x.id===plageId); if(!p) return;
   cellCtx = {ds, plageId};
-  document.getElementById('cell-title').textContent = `${p.nom} — ${new Date(ds+'T12:00').toLocaleDateString('fr-BE',{weekday:'long',day:'numeric',month:'long'})}`;
+  document.getElementById('cell-title').textContent = `${p.nom} - ${new Date(ds+'T12:00').toLocaleDateString('fr-BE',{weekday:'long',day:'numeric',month:'long'})}`;
   document.getElementById('cell-sub').textContent   = `Minimum requis : ${p.min} éducateur(s)`;
   const plan     = (horaire[currentMonth]||{})[ds] || {};
   const assigned = (plan[plageId]||[]).map(x=>+x);
@@ -234,8 +234,8 @@ function renderFiche(){
 
     const plageChips = abs
       ? `<span class="plage-tag" style="background:var(--orange-l);color:var(--orange)">${abs.type==='conge'?'🌴 CP':abs.type==='maladie'?'🤒 Mal.':'🔄 Récup.'}</span>`
-      : myPlages.map(p=>`<span class="plage-tag" style="background:${p.color}22;color:${p.color};border:1px solid ${p.color}44">${p.nom} <small>${p.debut}–${p.fin}</small></span>`).join('');
-    const hCell = h>0 ? `<span style="font-weight:700;color:var(--green)">${h.toFixed(1)}h</span>` : (abs?'':'—');
+      : myPlages.map(p=>`<span class="plage-tag" style="background:${p.color}22;color:${p.color};border:1px solid ${p.color}44">${p.nom} <small>${p.debut}-${p.fin}</small></span>`).join('');
+    const hCell = h>0 ? `<span style="font-weight:700;color:var(--green)">${h.toFixed(1)}h</span>` : (abs?'':'-');
     return `<tr>
       <td class="day-col ${we?'we':''}">
         <div style="font-size:.68rem;color:var(--ink3);text-transform:uppercase;letter-spacing:.5px">${JOURS[dow]}</div>
@@ -271,7 +271,7 @@ function renderFiche(){
         <tbody>${rows}</tbody>
         <tfoot><tr class="sheet-total">
           <td colspan="2" style="text-align:left;padding:8px">TOTAL ${monthLabel(moisStr)}</td>
-          <td>${totalTrav.toFixed(1)}h</td><td>${totalCP.toFixed(1)}h</td><td>—</td>
+          <td>${totalTrav.toFixed(1)}h</td><td>${totalCP.toFixed(1)}h</td><td>-</td>
         </tr></tfoot>
       </table></div>
     </div>`;

@@ -1,5 +1,5 @@
 // ============================================================
-// data.js — État global, constantes, sauvegarde/chargement
+// data.js - État global, constantes, sauvegarde/chargement
 // ============================================================
 
 // ── État global ──
@@ -77,7 +77,7 @@ function isFerie(ds){
   return joursFeries.some(f => f.date===ds && f.active);
 }
 
-// ── Sauvegarde — chaque mois séparé pour éviter la limite 5MB ──
+// ── Sauvegarde - chaque mois séparé pour éviter la limite 5MB ──
 function save(){
   try{
     localStorage.setItem('planeduc_v3_config', JSON.stringify({educs,plages,reglesL,reglesI,reglesC,absences,joursFeries}));
