@@ -175,14 +175,17 @@ async function genMois(moisStr, L){
       return p.jours.includes(dc);
     }).length;
     const totalPostes = joursActifs * p.min;
+    // Quota de base : proportionnel au contrat
+    // Mi-temps = moitie des postes d'un temps plein
     educs.forEach(e => {
       const partBase = totalPostes * ratioE(e) / Math.max(0.01, poidsTotal);
-      // Correction historique : si trop de cette plage -> moins prioritaire
-      const avgHistPlage = educs.reduce((s, x) =>
-        s + (hist[x.id].plageCount[p.id] || 0) * ratioE(e) / Math.max(0.01, ratioE(x))
+      // Correction historique ponderee : compare normalise par ratio
+      const myHistNorm  = (hist[e.id].plageCount[p.id] || 0) / Math.max(0.01, ratioE(e));
+      const avgHistNorm = educs.reduce((s, x) =>
+        s + (hist[x.id].plageCount[p.id] || 0) / Math.max(0.01, ratioE(x))
       , 0) / Math.max(1, educs.length);
-      const ecart = (hist[e.id].plageCount[p.id] || 0) - avgHistPlage;
-      quotaPlage[e.id][p.id] = Math.max(0, partBase - ecart * 0.4);
+      const ecart = myHistNorm - avgHistNorm;
+      quotaPlage[e.id][p.id] = Math.max(0, partBase - ecart * ratioE(e) * 0.4);
     });
   });
 
@@ -320,85 +323,98 @@ async function genMois(moisStr, L){
   }
 
   // ================================================================
-  // P3+P4 : SCORE (arbitrage entre candidats valides)
-  // Score BAS = plus prioritaire
+  // P3+P4 : SCORE — Score BAS = plus prioritaire
+  // Toute comparaison est PONDEREE par le ratio contrat.
+  // Un mi-temps qui fait N prestations = temps plein qui en fait 2N.
   // ================================================================
   function score(e, d, ds, plage, weOrFerie, patternIds){
-    const t  = tracker[e.id];
-    const ht = hist[e.id];
-    let sc   = 0;
+    const t   = tracker[e.id];
+    const ht  = hist[e.id];
+    const re  = ratioE(e); // ratio contrat de cet educ (ex: 0.5 pour mi-temps)
+    let sc    = 0;
 
-    // --- P3a : SOLDE HEURES ---
-    // Solde cumule + ce mois jusqu'ici vs quota
-    const soldeTotal = ht.solde + (t.h - quotaH[e.id]);
-    sc += soldeTotal * 3.0;
-    // Bonus fort si l'educ a besoin d'heures (solde tres negatif)
-    if(soldeTotal < -20) sc -= 30; // tres prioritaire
-    else if(soldeTotal < -10) sc -= 15;
-    else if(soldeTotal < -5)  sc -= 5;
-    // Malus si deja bien au-dessus du quota
-    if(soldeTotal > 15) sc += 20;
-    else if(soldeTotal > 8)  sc += 8;
+    // ── Helpers pour moyennes ponderees ──
+    // Moyenne d'une valeur par educ, normalisee par ratio contrat
+    // Permet de comparer equitablement temps plein et mi-temps
+    function moyPonderee(fn){
+      const total = educs.reduce((s,x) => s + fn(x) / Math.max(0.01, ratioE(x)), 0);
+      return total / Math.max(1, educs.length);
+    }
 
-    // --- P3b : EQUITE PRESTATIONS PAR PLAGE (poids renforce) ---
-    const myCount    = (ht.plageCount[plage.id] || 0) + (t.plageCount[plage.id] || 0);
-    const cibleCount = quotaPlage[e.id][plage.id] || 0;
-    const ecartCount = myCount - cibleCount;
-    sc += ecartCount * 8; // poids fort pour l'equite par plage
-    // Bonus supplementaire si vraiment en deficit sur cette plage
-    if(ecartCount < -2) sc -= 10;
+    // Valeur normalisee de cet educ (divise par son ratio)
+    // Ex: mi-temps avec 4 nuits -> 4/0.5 = 8 (equivalent temps plein)
+    // -> compare a la moyenne, si moy=8 -> c'est equitable
 
-    // --- P3c : RECURRENCE / PATTERN ---
-    // Bonus fort si l'educ est dans le pattern prevu pour ce jour
-    if(patternIds && patternIds.includes(e.id)) sc -= 10; // reduit pour ne pas ecraser l'equite
+    // ── P3a : SOLDE HEURES ──
+    const soldeCumul = ht.solde + (t.h - quotaH[e.id]);
+    sc += soldeCumul * 3.5;
+    if(soldeCumul < -25) sc -= 35;
+    else if(soldeCumul < -15) sc -= 20;
+    else if(soldeCumul < -8)  sc -= 10;
+    if(soldeCumul > 20) sc += 25;
+    else if(soldeCumul > 12) sc += 12;
 
-    // --- P3d : EQUITE WE ---
+    // ── P3b : EQUITE PRESTATIONS PAR PLAGE (pondere par contrat) ──
+    const myCountPlage  = (ht.plageCount[plage.id] || 0) + (t.plageCount[plage.id] || 0);
+    const myNormPlage   = myCountPlage / Math.max(0.01, re); // normalise
+    const avgNormPlage  = moyPonderee(x =>
+      (hist[x.id].plageCount[plage.id] || 0) + (tracker[x.id].plageCount[plage.id] || 0)
+    );
+    const ecartPlage = myNormPlage - avgNormPlage;
+    sc += ecartPlage * 9;
+    if(ecartPlage < -2) sc -= 12; // bonus deficit
+    if(ecartPlage >  2) sc += 8;  // malus surplus
+
+    // ── P3c : RECURRENCE / PATTERN ──
+    if(patternIds && patternIds.includes(e.id)) sc -= 8;
+
+    // ── P3d : EQUITE WE (pondere par contrat) ──
     if(weOrFerie){
-      const myWE  = (ht.we || 0) + t.weCount;
-      const avgWE = educs.reduce((s, x) =>
-        s + ((hist[x.id].we || 0) + tracker[x.id].weCount) * ratioE(e) / Math.max(0.01, ratioE(x))
-      , 0) / Math.max(1, educs.length);
-      sc += (myWE - avgWE) * 7;
+      const myWE   = ((ht.we || 0) + t.weCount) / Math.max(0.01, re);
+      const avgWE  = moyPonderee(x => (hist[x.id].we || 0) + tracker[x.id].weCount);
+      sc += (myWE - avgWE) * 8;
     }
 
-    // --- P3e : EQUITE FERIES ---
+    // ── P3e : EQUITE FERIES (pondere par contrat) ──
     if(isFerie(ds)){
-      const myFer  = ht.ferie || 0;
-      const avgFer = educs.reduce((s, x) =>
-        s + (hist[x.id].ferie || 0) * ratioE(e) / Math.max(0.01, ratioE(x))
-      , 0) / Math.max(1, educs.length);
-      sc += (myFer - avgFer) * 9;
+      const myFer  = (ht.ferie || 0) / Math.max(0.01, re);
+      const avgFer = moyPonderee(x => hist[x.id].ferie || 0);
+      sc += (myFer - avgFer) * 10;
     }
 
-    // --- P3f : EQUITE NUITS (poids eleve car difficile a equilibrer) ---
+    // ── P3f : EQUITE NUITS (pondere par contrat, poids eleve) ──
     if(isNuit(plage)){
-      const myNuits  = (hist[e.id].plageCount[plage.id] || 0) + t.nuits;
-      // Moyenne ponderee par contrat
-      const avgNuits = educs.reduce((s, x) => {
-        return s + ((hist[x.id].plageCount[plage.id] || 0) + tracker[x.id].nuits)
-               * ratioE(e) / Math.max(0.01, ratioE(x));
-      }, 0) / Math.max(1, educs.length);
-      sc += (myNuits - avgNuits) * 12; // poids fort pour les nuits
+      // Toutes nuits confondues (pas seulement cette plage)
+      const myNuits  = (ht.plageCount[plage.id] || 0) + t.nuits;
+      const myNuitN  = myNuits / Math.max(0.01, re);
+      const avgNuitN = moyPonderee(x =>
+        (hist[x.id].plageCount[plage.id] || 0) + tracker[x.id].nuits
+      );
+      const ecartNuit = myNuitN - avgNuitN;
+      sc += ecartNuit * 14;
+      if(ecartNuit < -2) sc -= 15; // tres en deficit de nuits -> tres prioritaire
+      if(ecartNuit >  2) sc += 10; // surplus de nuits -> defavorise
     }
 
-    // --- P4 : DEMANDES EDUCS ---
-    // Preferences de plage (declares dans le profil)
-    if((e.prefs || []).includes(plage.id)) sc -= 14;
-    // Demandes structurees (jour + plage specifique)
+    // ── P4 : PREFERENCES ──
+    if((e.prefs || []).includes(plage.id)) sc -= 12;
+
+    // ── P4 : DEMANDES STRUCTUREES ──
     const dowCheck = d.getDay() === 0 ? 6 : d.getDay() - 1;
     (e.demandes || []).forEach(dem => {
       if(dem.jour === dowCheck && (dem.plageIds || []).includes(plage.id)){
-        if(dem.type === 'eviter')  sc += 20;
-        if(dem.type === 'prefere') sc -= 20;
+        if(dem.type === 'eviter')  sc += 18;
+        if(dem.type === 'prefere') sc -= 18;
       }
     });
 
     // Eviter double prestation le meme jour
-    if(Object.values(planning[ds] || {}).some(ids => Array.isArray(ids) && ids.map(x=>+x).includes(e.id))) sc += 18;
+    if(Object.values(planning[ds] || {}).some(ids =>
+      Array.isArray(ids) && ids.map(x=>+x).includes(e.id)
+    )) sc += 20;
 
     return sc;
   }
-
   function updateTracker(e, d, ds, plage, nuit, we){
     const t = tracker[e.id];
     t.h += plage.dureeH;
