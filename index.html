@@ -323,6 +323,13 @@
   <hr>
   <div class="field"><label>Plages préférées</label><div class="chk-group" id="me-prefs"></div></div>
   <div class="field"><label>Plages refusées</label><div class="chk-group" id="me-excls"></div></div>
+  <div class="field" style="margin:8px 0 12px 0;padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px">
+    <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:.83rem;font-weight:600;color:var(--ink2)">
+      <input type="checkbox" id="me-pause" style="width:16px;height:16px;accent-color:var(--accent);flex-shrink:0">
+      Accepte les horaires à pause (matin + soir le même jour)
+    </label>
+    <div style="font-size:.72rem;color:var(--ink3);margin-top:4px;margin-left:26px">Si coché, cet éducateur peut enchaîner matin et soir dans la même journée</div>
+  </div>
   <hr>
   <div style="margin-bottom:10px">
     <div style="font-size:.78rem;font-weight:700;color:var(--ink2);margin-bottom:8px">Demandes spéciales (max 2)</div>
@@ -416,10 +423,10 @@
 
 <!-- ===== SCRIPTS — ordre important ===== -->
 <script src="data.js"></script>    <!-- État, constantes, storage -->
+<script src="ui.js"></script>      <!-- Navigation, formulaires, modals -->
 <script src="algo.js"></script>    <!-- Moteur de génération -->
 <script src="horaire.js"></script> <!-- Affichage horaire et fiche -->
 <script src="stats.js"></script>   <!-- Soldes heures et stats -->
-<script src="ui.js"></script>      <!-- Navigation, formulaires, modals (en dernier : appelle toutes les autres fonctions) -->
 
 </body>
 </html>

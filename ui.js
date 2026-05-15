@@ -102,15 +102,13 @@ function renderDemandesForm(demandes){
 }
 
 function resetEducForm(){
-  var g = function(id){ return document.getElementById(id); };
-  if(g('me-id'))      g('me-id').value = '';
-  if(g('me-title'))   g('me-title').textContent = 'Nouvel educateur';
-  if(g('me-prenom'))  g('me-prenom').value = '';
-  if(g('me-nom'))     g('me-nom').value = '';
-  if(g('me-notes'))   g('me-notes').value = '';
-  if(g('me-contrat')) g('me-contrat').value = 'temps-plein';
-  if(g('me-heures'))  g('me-heures').value = '';
-  if(g('me-h-field')) g('me-h-field').style.display = 'none';
+  document.getElementById('me-id').value = '';
+  document.getElementById('me-title').textContent = 'Nouvel éducateur';
+  ['me-prenom','me-nom','me-notes'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('me-contrat').value = 'temps-plein';
+  document.getElementById('me-heures').value = '';
+  document.getElementById('me-h-field').style.display = 'none';
+  const pEl=document.getElementById('me-pause'); if(pEl) pEl.checked=false;
   document.querySelectorAll('#me-jours-grp .chk-pill').forEach((p,i)=>{
     const cb = p.querySelector('input');
     cb.checked = [0,1,2,3,4].includes(i);
@@ -148,6 +146,8 @@ function openEditEduc(id){
   document.getElementById('me-contrat').value = e.contrat;
   document.getElementById('me-heures').value = e.heuresPerso||'';
   document.getElementById('me-h-field').style.display = e.contrat==='perso' ? '' : 'none';
+  const pauseEl = document.getElementById('me-pause');
+  if(pauseEl) pauseEl.checked = e.acceptePause||false;
   document.getElementById('me-notes').value = e.notes||'';
   document.querySelectorAll('#me-jours-grp .chk-pill').forEach(p=>{
     const cb = p.querySelector('input');
@@ -160,26 +160,24 @@ function openEditEduc(id){
 }
 
 function saveEduc(){
-  var g = function(id){ return document.getElementById(id); };
-  const prenom = (g('me-prenom')||{value:''}).value.trim();
-  const nom    = (g('me-nom')||{value:''}).value.trim();
+  const prenom = document.getElementById('me-prenom').value.trim();
+  const nom    = document.getElementById('me-nom').value.trim();
   if(!prenom||!nom){ alert('Prénom et nom requis.'); return; }
   const jours      = [...document.querySelectorAll('#me-jours-grp input:checked')].map(c=>+c.value);
   const prefs      = [...document.querySelectorAll('.ep:checked')].map(c=>+c.value);
   const excls      = [...document.querySelectorAll('.ee:checked')].map(c=>+c.value);
-  const contrat    = g('me-contrat') ? g('me-contrat').value : 'temps-plein';
-  const heuresPerso = g('me-heures') ? (+g('me-heures').value || null) : null;
-  const notes      = g('me-notes') ? g('me-notes').value.trim() : '';
-  const editId     = g('me-id') ? (+g('me-id').value || null) : null;
+  const contrat     = document.getElementById('me-contrat').value;
+  const heuresPerso = +document.getElementById('me-heures').value || null;
+  const pauseEl2    = document.getElementById('me-pause');
+  const acceptePause= pauseEl2 ? pauseEl2.checked : false;
+  const notes      = document.getElementById('me-notes').value.trim();
+  const editId     = +document.getElementById('me-id').value || null;
 
   // Lire les demandes structurées (max 2) - un jour + plusieurs plages
   const demandes = [];
   [1,2].forEach(i=>{
-    var jourEl = document.getElementById('me-dem-jour-' + i);
-    var typeEl = document.getElementById('me-dem-type-' + i);
-    if(!jourEl || !typeEl) return;
-    const jour = +jourEl.value;
-    const type = typeEl.value;
+    const jour    = +document.getElementById(`me-dem-jour-${i}`).value;
+    const type    = document.getElementById(`me-dem-type-${i}`).value;
     const plageIds = [...document.querySelectorAll(`.dem-plage-${i}:checked`)].map(c=>+c.value);
     if(!isNaN(jour) && jour !== -1 && plageIds.length > 0){
       demandes.push({jour, type, plageIds});
@@ -188,9 +186,9 @@ function saveEduc(){
 
   if(editId){
     const idx = educs.findIndex(e=>e.id===editId);
-    if(idx>=0) educs[idx] = {...educs[idx], prenom, nom, contrat, heuresPerso, jours, prefs, excls, notes, demandes};
+    if(idx>=0) educs[idx] = {...educs[idx], prenom, nom, contrat, heuresPerso, acceptePause, jours, prefs, excls, notes, demandes};
   } else {
-    educs.push({id:Date.now(), prenom, nom, contrat, heuresPerso, jours, prefs, excls, notes, demandes, color:COLORS[educs.length%COLORS.length]});
+    educs.push({id:Date.now(), prenom, nom, contrat, heuresPerso, acceptePause, jours, prefs, excls, notes, demandes, color:COLORS[educs.length%COLORS.length]});
   }
   save(); renderAll(); closeModal('modal-educ');
 }
