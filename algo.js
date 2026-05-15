@@ -114,6 +114,7 @@ async function genMois(moisStr, L){
     if(!plan) continue;
     const [ky, km] = key.split('-').map(Number);
     const joursMois = getDays(ky, km);
+    // Jours ouvrables reels de ce mois (lun-ven hors feries)
     const joursOuvMois = joursMois.filter(d => {
       const dw = d.getDay(); return dw >= 1 && dw <= 5 && !isFerie(dayStr(d));
     });
@@ -140,7 +141,7 @@ async function genMois(moisStr, L){
       });
     });
 
-    // Solde = h travaillees - cible du mois
+    // Solde = h travaillees - cible du mois (7.6h x jours ouvrables reels x ratio)
     educs.forEach(e => {
       const cible = joursOuvMois.length * 7.6 * ratioE(e);
       hist[e.id].solde += (hParEduc[e.id] - cible);
@@ -150,15 +151,16 @@ async function genMois(moisStr, L){
   // ================================================================
   // QUOTA DU MOIS (P3)
   // ================================================================
+  // Jours ouvrables reels du mois (lun-ven hors feries actifs)
   const joursOuv = jours.filter(d => {
     const dw = d.getDay(); return dw >= 1 && dw <= 5 && !isFerie(dayStr(d));
   });
   const poidsTotal = educs.reduce((s, e) => s + ratioE(e), 0);
 
-  // Quota heures : cible de base + ajustement solde (borne a ±8h)
+  // Quota heures : 7.6h x jours ouvrables reels x ratio + ajustement solde (borne ±8h)
   const quotaH = {};
   educs.forEach(e => {
-    const base  = joursOuv.length * 7.6 * ratioE(e);
+    const base  = joursOuv.length * 7.6 * ratioE(e); // formule correcte
     const ajust = Math.max(-8, Math.min(8, -hist[e.id].solde * 0.35));
     quotaH[e.id] = base + ajust;
   });

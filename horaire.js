@@ -1,6 +1,19 @@
 // ============================================================
-// horaire.js - Affichage horaire mensuel, fiche individuelle
+// horaire.js — Affichage horaire mensuel, fiche individuelle
 // ============================================================
+
+// Helper : nombre de jours ouvrables (lun-ven hors feries) d'un mois
+function getJoursOuvrables(yr, mo){
+  return getDays(yr, mo).filter(d => {
+    const dw = d.getDay();
+    return dw >= 1 && dw <= 5 && !isFerie(dayStr(d));
+  }).length;
+}
+
+// Cible heures d'un mois pour un educ : 7.6h x jours ouvrables x ratio contrat
+function getCibleMois(educ, yr, mo){
+  return getJoursOuvrables(yr, mo) * 7.6 * (getTargetH(educ) / 38);
+}
 
 // ── Navigation mois ──
 function chgMonth(delta){
@@ -31,7 +44,6 @@ function updateMonthLabels(){
 function renderHoraire(){
   updateMonthLabels();
 
-  // Liste des mois générés cliquables
   const moisGen = Object.keys(horaire).filter(k=>Object.keys(horaire[k]).length>0).sort();
   const mgEl = document.getElementById('mois-generes');
   if(mgEl){
@@ -47,7 +59,6 @@ function renderHoraire(){
   const jours   = getDays(yr, mo);
   const plan    = horaire[currentMonth] || {};
 
-  // Stats
   let totalA=0, totalM=0, totalN=0;
   jours.forEach(d=>{
     const ds = dayStr(d);
@@ -69,7 +80,6 @@ function renderHoraire(){
   document.getElementById('hor-alerts').innerHTML = totalM>0
     ? `<div class="alert a-warn">⚠️ ${totalM} poste(s) non couvert(s) ce mois.</div>` : '';
 
-  // Légende + comptage demandes non respectées (clés _s_educId_plageId)
   let forcedCount = 0;
   Object.values(plan).forEach(daySlots=>{
     Object.entries(daySlots).forEach(([k,v])=>{
@@ -94,7 +104,6 @@ function renderHoraire(){
     return;
   }
 
-  // Tableau : lignes=jours, colonnes=plages
   let html = `<table class="sch-table"><thead><tr><th style="min-width:90px">Date</th>`;
   plages.forEach(p=>{
     html += `<th style="background:${p.color};color:#fff;border:1px solid rgba(255,255,255,.2)">
@@ -117,14 +126,12 @@ function renderHoraire(){
     </td>`;
 
     plages.forEach(p=>{
-      // Jours fériés : appliquer les plages WE
       const dowCheck = (ferie&&!we) ? 5 : dowIdx;
       if(!p.jours.includes(dowCheck)){
-        html += `<td class="${we||ferie?'we-bg':''}"><div class="empty-slot">-</div></td>`;
+        html += `<td class="${we||ferie?'we-bg':''}"><div class="empty-slot">—</div></td>`;
         return;
       }
-      const ids    = ((plan[ds]||{})[p.id]||[]).map(x=>+x);
-      // Lire les statuts depuis les clés _s_educId_plageId
+      const ids     = ((plan[ds]||{})[p.id]||[]).map(x=>+x);
       const absHere = educs.filter(e=>isAbsent(e.id,ds)&&(e.jours||[]).includes(dowIdx)&&!((e.excls||[]).includes(p.id)));
 
       let chips = ids.map(id=>{
@@ -167,7 +174,7 @@ function renderHoraire(){
 function openCellEdit(ds, plageId){
   const p = plages.find(x=>x.id===plageId); if(!p) return;
   cellCtx = {ds, plageId};
-  document.getElementById('cell-title').textContent = `${p.nom} - ${new Date(ds+'T12:00').toLocaleDateString('fr-BE',{weekday:'long',day:'numeric',month:'long'})}`;
+  document.getElementById('cell-title').textContent = `${p.nom} — ${new Date(ds+'T12:00').toLocaleDateString('fr-BE',{weekday:'long',day:'numeric',month:'long'})}`;
   document.getElementById('cell-sub').textContent   = `Minimum requis : ${p.min} éducateur(s)`;
   const plan     = (horaire[currentMonth]||{})[ds] || {};
   const assigned = (plan[plageId]||[]).map(x=>+x);
@@ -215,8 +222,9 @@ function renderFiche(){
   const [yr,mo] = moisStr.split('-').map(Number);
   const jours   = getDays(yr, mo);
   const plan    = horaire[moisStr] || {};
-  const targetH = getTargetH(educ);
-  const targetHMois = targetH * 4.33;
+
+  // CORRECTION : cible = 7.6h x jours ouvrables réels x ratio contrat
+  const targetHMois = getCibleMois(educ, yr, mo);
 
   let totalTrav=0, totalCP=0;
   const rows = jours.map(d=>{
@@ -229,13 +237,14 @@ function renderFiche(){
       return ids.includes(educId);
     });
     const h = myPlages.reduce((s,p)=>s+p.dureeH, 0);
-    if(abs && abs.type==='conge') totalCP += targetH/5;
+    // CP : on compte 7.6h x ratio par jour de conge
+    if(abs && abs.type==='conge') totalCP += 7.6 * (getTargetH(educ) / 38);
     else totalTrav += h;
 
     const plageChips = abs
       ? `<span class="plage-tag" style="background:var(--orange-l);color:var(--orange)">${abs.type==='conge'?'🌴 CP':abs.type==='maladie'?'🤒 Mal.':'🔄 Récup.'}</span>`
-      : myPlages.map(p=>`<span class="plage-tag" style="background:${p.color}22;color:${p.color};border:1px solid ${p.color}44">${p.nom} <small>${p.debut}-${p.fin}</small></span>`).join('');
-    const hCell = h>0 ? `<span style="font-weight:700;color:var(--green)">${h.toFixed(1)}h</span>` : (abs?'':'-');
+      : myPlages.map(p=>`<span class="plage-tag" style="background:${p.color}22;color:${p.color};border:1px solid ${p.color}44">${p.nom} <small>${p.debut}–${p.fin}</small></span>`).join('');
+    const hCell = h>0 ? `<span style="font-weight:700;color:var(--green)">${h.toFixed(1)}h</span>` : (abs?'':'—');
     return `<tr>
       <td class="day-col ${we?'we':''}">
         <div style="font-size:.68rem;color:var(--ink3);text-transform:uppercase;letter-spacing:.5px">${JOURS[dow]}</div>
@@ -248,20 +257,21 @@ function renderFiche(){
     </tr>`;
   }).join('');
 
-  const solde = totalTrav - targetHMois + totalCP;
+  const solde = totalTrav + totalCP - targetHMois;
+  const joursOuv = getJoursOuvrables(yr, mo);
   el.innerHTML = `
     <div class="card" style="margin-bottom:12px">
       <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
         <div class="avatar" style="background:${educ.color||COLORS[0]};width:44px;height:44px;font-size:1rem">${(educ.prenom[0]+educ.nom[0]).toUpperCase()}</div>
         <div>
           <div style="font-family:'Syne',sans-serif;font-size:1.1rem;font-weight:800">${educ.prenom} ${educ.nom}</div>
-          <div style="font-size:.78rem;color:var(--ink3)">${educ.contrat} · ${getTargetH(educ)}h/sem · ${monthLabel(moisStr)}</div>
+          <div style="font-size:.78rem;color:var(--ink3)">${educ.contrat} · ${getTargetH(educ)}h/sem · ${monthLabel(moisStr)} · ${joursOuv} jours ouvrables</div>
         </div>
         <div style="margin-left:auto;display:flex;gap:20px;flex-wrap:wrap;text-align:center">
           <div><div style="font-family:'Syne',sans-serif;font-size:1.4rem;font-weight:800;color:var(--green)">${totalTrav.toFixed(1)}h</div><div style="font-size:.7rem;color:var(--ink3)">Travaillées</div></div>
           <div><div style="font-family:'Syne',sans-serif;font-size:1.4rem;font-weight:800;color:var(--orange)">${totalCP.toFixed(1)}h</div><div style="font-size:.7rem;color:var(--ink3)">CP</div></div>
-          <div><div style="font-family:'Syne',sans-serif;font-size:1.4rem;font-weight:800;color:var(--blue)">${targetHMois.toFixed(0)}h</div><div style="font-size:.7rem;color:var(--ink3)">Contrat mois</div></div>
-          <div><div style="font-family:'Syne',sans-serif;font-size:1.4rem;font-weight:800;color:${Math.abs(solde)<=15?'var(--green)':solde>0?'var(--orange)':'var(--red)'}">${solde>=0?'+':''}${solde.toFixed(1)}h</div><div style="font-size:.7rem;color:var(--ink3)">Solde récup</div></div>
+          <div><div style="font-family:'Syne',sans-serif;font-size:1.4rem;font-weight:800;color:var(--blue)">${targetHMois.toFixed(1)}h</div><div style="font-size:.7rem;color:var(--ink3)">Cible mois</div></div>
+          <div><div style="font-family:'Syne',sans-serif;font-size:1.4rem;font-weight:800;color:${Math.abs(solde)<=15?'var(--green)':solde>0?'var(--orange)':'var(--red)'}">${solde>=0?'+':''}${solde.toFixed(1)}h</div><div style="font-size:.7rem;color:var(--ink3)">Solde</div></div>
         </div>
       </div>
     </div>
@@ -271,7 +281,7 @@ function renderFiche(){
         <tbody>${rows}</tbody>
         <tfoot><tr class="sheet-total">
           <td colspan="2" style="text-align:left;padding:8px">TOTAL ${monthLabel(moisStr)}</td>
-          <td>${totalTrav.toFixed(1)}h</td><td>${totalCP.toFixed(1)}h</td><td>-</td>
+          <td>${totalTrav.toFixed(1)}h</td><td>${totalCP.toFixed(1)}h</td><td>—</td>
         </tr></tfoot>
       </table></div>
     </div>`;
