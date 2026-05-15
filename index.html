@@ -1,5 +1,4 @@
 <!DOCTYPE html>
-
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
@@ -12,7 +11,6 @@
 <div class="app">
 
 <!-- SIDEBAR -->
-
 <aside class="sidebar">
   <div class="brand"><h1>PlanEduc Pro</h1><p>Gestion horaires éducateurs</p></div>
   <div class="nav-sec">Configuration</div>
@@ -37,11 +35,9 @@
 </aside>
 
 <!-- MAIN CONTENT -->
-
 <main class="main">
 
 <!-- ===== ÉDUCATEURS ===== -->
-
 <div id="page-educateurs" class="page active">
   <div class="page-title">👥 Éducateurs</div>
   <div class="page-sub">Gérez l'équipe, les contrats et les préférences.</div>
@@ -55,7 +51,6 @@
 </div>
 
 <!-- ===== PLAGES ===== -->
-
 <div id="page-plages" class="page">
   <div class="page-title">🕐 Plages horaires</div>
   <div class="page-sub">Créez autant de plages que nécessaire — semaine, week-end, nuit, réunion…</div>
@@ -115,7 +110,6 @@
 </div>
 
 <!-- ===== RÈGLES ===== -->
-
 <div id="page-regles" class="page">
   <div class="page-title">⚖️ Règles & Lois</div>
   <div class="page-sub">Activez et ajustez les contraintes légales et internes. Désactivez celles qui ne s'appliquent pas.</div>
@@ -135,7 +129,6 @@
 </div>
 
 <!-- ===== GÉNÉRER ===== -->
-
 <div id="page-generer" class="page">
   <div class="page-title">⚡ Générer l'horaire</div>
   <div class="page-sub">L'algorithme respecte : Lois → Convention → Équité → Préférences éducs</div>
@@ -173,7 +166,6 @@
 </div>
 
 <!-- ===== HORAIRE MENSUEL ===== -->
-
 <div id="page-horaire" class="page">
   <div class="page-title">📅 Horaire mensuel</div>
   <div class="page-sub">Vue par jour — chaque ligne = 1 jour, chaque colonne = 1 plage horaire.</div>
@@ -191,7 +183,6 @@
 </div>
 
 <!-- ===== FICHE INDIVIDUELLE ===== -->
-
 <div id="page-fiche" class="page">
   <div class="page-title">📋 Fiche individuelle</div>
   <div class="page-sub">Fiche de prestations par éducateur — même logique que la fiche papier.</div>
@@ -204,7 +195,6 @@
 </div>
 
 <!-- ===== SOLDES HEURES ===== -->
-
 <div id="page-soldes" class="page">
   <div class="page-title">⏱️ Soldes heures</div>
   <div class="page-sub">Suivi du solde d'heures sur la période — objectif : ±15h sur 3 mois.</div>
@@ -224,7 +214,6 @@
 </div>
 
 <!-- ===== STATS PRESTATIONS ===== -->
-
 <div id="page-stats" class="page">
   <div class="page-title">📊 Stats prestations</div>
   <div class="page-sub">Répartition des prestations par éducateur — équité par type de plage.</div>
@@ -245,7 +234,6 @@
 </div>
 
 <!-- ===== JOURS FÉRIÉS ===== -->
-
 <div id="page-feries" class="page">
   <div class="page-title">🎉 Jours fériés</div>
   <div class="page-sub">Les jours fériés appliquent automatiquement l'horaire week-end. Cochez les fériés belges ou ajoutez les vôtres.</div>
@@ -270,7 +258,6 @@
 </div>
 
 <!-- ===== ABSENCES ===== -->
-
 <div id="page-absences" class="page">
   <div class="page-title">🏥 Absences & Congés</div>
   <div class="page-sub">Encodez les absences. L'horaire les respectera lors de la prochaine génération.</div>
@@ -300,7 +287,6 @@
 </div>
 
 <!-- ===== MODALS ===== -->
-
 <div id="modal-educ" class="modal-bg" style="display:none" onclick="bgClose(event,'modal-educ')">
 <div class="modal" onclick="event.stopPropagation()">
   <button class="modal-close" onclick="closeModal('modal-educ')">✕</button>
@@ -342,46 +328,43 @@
     <div style="font-size:.78rem;font-weight:700;color:var(--ink2);margin-bottom:8px">Demandes spéciales (max 2)</div>
     <div style="display:flex;flex-direction:column;gap:12px" id="me-demandes">
 
-```
-  <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px">
-    <div style="font-size:.75rem;font-weight:600;color:var(--ink3);margin-bottom:8px">Demande 1</div>
-    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
-      <label style="font-size:.78rem;min-width:30px">Jour :</label>
-      <select id="me-dem-jour-1" style="flex:1;min-width:100px">
-        <option value="-1">-- Choisir --</option>
-        <option value="0">Lundi</option><option value="1">Mardi</option><option value="2">Mercredi</option>
-        <option value="3">Jeudi</option><option value="4">Vendredi</option><option value="5">Samedi</option><option value="6">Dimanche</option>
-      </select>
-      <select id="me-dem-type-1" style="flex:1;min-width:120px">
-        <option value="eviter">⚠️ À éviter</option>
-        <option value="prefere">⭐ Préféré</option>
-      </select>
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px">
+        <div style="font-size:.75rem;font-weight:600;color:var(--ink3);margin-bottom:8px">Demande 1</div>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+          <label style="font-size:.78rem;min-width:30px">Jour :</label>
+          <select id="me-dem-jour-1" style="flex:1;min-width:100px">
+            <option value="-1">-- Choisir --</option>
+            <option value="0">Lundi</option><option value="1">Mardi</option><option value="2">Mercredi</option>
+            <option value="3">Jeudi</option><option value="4">Vendredi</option><option value="5">Samedi</option><option value="6">Dimanche</option>
+          </select>
+          <select id="me-dem-type-1" style="flex:1;min-width:120px">
+            <option value="eviter">⚠️ À éviter</option>
+            <option value="prefere">⭐ Préféré</option>
+          </select>
+        </div>
+        <div style="font-size:.75rem;color:var(--ink3);margin-bottom:5px">Plages concernées :</div>
+        <div class="chk-group" id="me-dem-plages-1"></div>
+      </div>
+
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px">
+        <div style="font-size:.75rem;font-weight:600;color:var(--ink3);margin-bottom:8px">Demande 2</div>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
+          <label style="font-size:.78rem;min-width:30px">Jour :</label>
+          <select id="me-dem-jour-2" style="flex:1;min-width:100px">
+            <option value="-1">-- Choisir --</option>
+            <option value="0">Lundi</option><option value="1">Mardi</option><option value="2">Mercredi</option>
+            <option value="3">Jeudi</option><option value="4">Vendredi</option><option value="5">Samedi</option><option value="6">Dimanche</option>
+          </select>
+          <select id="me-dem-type-2" style="flex:1;min-width:120px">
+            <option value="eviter">⚠️ À éviter</option>
+            <option value="prefere">⭐ Préféré</option>
+          </select>
+        </div>
+        <div style="font-size:.75rem;color:var(--ink3);margin-bottom:5px">Plages concernées :</div>
+        <div class="chk-group" id="me-dem-plages-2"></div>
+      </div>
+
     </div>
-    <div style="font-size:.75rem;color:var(--ink3);margin-bottom:5px">Plages concernées :</div>
-    <div class="chk-group" id="me-dem-plages-1"></div>
-  </div>
-
-  <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px">
-    <div style="font-size:.75rem;font-weight:600;color:var(--ink3);margin-bottom:8px">Demande 2</div>
-    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
-      <label style="font-size:.78rem;min-width:30px">Jour :</label>
-      <select id="me-dem-jour-2" style="flex:1;min-width:100px">
-        <option value="-1">-- Choisir --</option>
-        <option value="0">Lundi</option><option value="1">Mardi</option><option value="2">Mercredi</option>
-        <option value="3">Jeudi</option><option value="4">Vendredi</option><option value="5">Samedi</option><option value="6">Dimanche</option>
-      </select>
-      <select id="me-dem-type-2" style="flex:1;min-width:120px">
-        <option value="eviter">⚠️ À éviter</option>
-        <option value="prefere">⭐ Préféré</option>
-      </select>
-    </div>
-    <div style="font-size:.75rem;color:var(--ink3);margin-bottom:5px">Plages concernées :</div>
-    <div class="chk-group" id="me-dem-plages-2"></div>
-  </div>
-
-</div>
-```
-
   </div>
   <hr>
   <div class="btn-row">
@@ -432,15 +415,10 @@
 </div>
 
 <!-- ===== SCRIPTS — ordre important ===== -->
-
 <script src="data.js"></script>    <!-- État, constantes, storage -->
-
 <script src="algo.js"></script>    <!-- Moteur de génération -->
-
 <script src="horaire.js"></script> <!-- Affichage horaire et fiche -->
-
 <script src="stats.js"></script>   <!-- Soldes heures et stats -->
-
 <script src="ui.js"></script>      <!-- Navigation, formulaires, modals (en dernier : appelle toutes les autres fonctions) -->
 
 </body>
