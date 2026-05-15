@@ -305,12 +305,17 @@ async function genMois(moisStr, L){
   // ================================================================
   // CONVENTION INTERNE (filtre souple - relachable si besoin P2)
   // ================================================================
-  function respecteConvention(e, d, ds, plage){
+  function respecteConvention(e, d, ds, plage, strict){
     const t = tracker[e.id];
     // Plage refusee par l'educ (excls)
     if((e.excls || []).includes(plage.id)) return false;
     // Max WE par mois
     if(isWE(d) && t.weCount >= maxWeMois) return false;
+    // En mode strict : bloquer si tres largement au-dessus du quota (+20h)
+    if(strict){
+      const solde = hist[e.id].solde + (t.h - quotaH[e.id]);
+      if(solde > 20) return false;
+    }
     return true;
   }
 
@@ -327,18 +332,25 @@ async function genMois(moisStr, L){
     // Solde cumule + ce mois jusqu'ici vs quota
     const soldeTotal = ht.solde + (t.h - quotaH[e.id]);
     sc += soldeTotal * 3.0;
-    // Bonus si l'educ a besoin d'heures (solde negatif)
-    if(soldeTotal < -10) sc -= 10;
+    // Bonus fort si l'educ a besoin d'heures (solde tres negatif)
+    if(soldeTotal < -20) sc -= 30; // tres prioritaire
+    else if(soldeTotal < -10) sc -= 15;
+    else if(soldeTotal < -5)  sc -= 5;
+    // Malus si deja bien au-dessus du quota
+    if(soldeTotal > 15) sc += 20;
+    else if(soldeTotal > 8)  sc += 8;
 
-    // --- P3b : EQUITE PRESTATIONS PAR PLAGE ---
-    const myCount  = (ht.plageCount[plage.id] || 0) + (t.plageCount[plage.id] || 0);
-    // Cible ponderee par contrat
+    // --- P3b : EQUITE PRESTATIONS PAR PLAGE (poids renforce) ---
+    const myCount    = (ht.plageCount[plage.id] || 0) + (t.plageCount[plage.id] || 0);
     const cibleCount = quotaPlage[e.id][plage.id] || 0;
-    sc += (myCount - cibleCount) * 5;
+    const ecartCount = myCount - cibleCount;
+    sc += ecartCount * 8; // poids fort pour l'equite par plage
+    // Bonus supplementaire si vraiment en deficit sur cette plage
+    if(ecartCount < -2) sc -= 10;
 
     // --- P3c : RECURRENCE / PATTERN ---
     // Bonus fort si l'educ est dans le pattern prevu pour ce jour
-    if(patternIds && patternIds.includes(e.id)) sc -= 25;
+    if(patternIds && patternIds.includes(e.id)) sc -= 10; // reduit pour ne pas ecraser l'equite
 
     // --- P3d : EQUITE WE ---
     if(weOrFerie){
@@ -358,11 +370,15 @@ async function genMois(moisStr, L){
       sc += (myFer - avgFer) * 9;
     }
 
-    // --- P3f : EQUITE NUITS ---
+    // --- P3f : EQUITE NUITS (poids eleve car difficile a equilibrer) ---
     if(isNuit(plage)){
-      const myNuits  = t.nuits;
-      const avgNuits = educs.reduce((s, x) => s + tracker[x.id].nuits, 0) / Math.max(1, educs.length);
-      sc += (myNuits - avgNuits) * 5;
+      const myNuits  = (hist[e.id].plageCount[plage.id] || 0) + t.nuits;
+      // Moyenne ponderee par contrat
+      const avgNuits = educs.reduce((s, x) => {
+        return s + ((hist[x.id].plageCount[plage.id] || 0) + tracker[x.id].nuits)
+               * ratioE(e) / Math.max(0.01, ratioE(x));
+      }, 0) / Math.max(1, educs.length);
+      sc += (myNuits - avgNuits) * 12; // poids fort pour les nuits
     }
 
     // --- P4 : DEMANDES EDUCS ---
@@ -413,7 +429,7 @@ async function genMois(moisStr, L){
     planning[ds] = {};
 
     const dowForPlages = (ferie && !we) ? 5 : dow;
-    const pj = plages.filter(p => p.jours.includes(dowForPlages));
+    const pjBase = plages.filter(p => p.jours.includes(dowForPlages));
 
     // Pattern du jour
     const weN = weNumMap[ds] !== undefined ? weNumMap[ds] : 0;
@@ -421,11 +437,28 @@ async function genMois(moisStr, L){
       ? (patternWE[weN] || patternWE[0] || {})
       : (patternSem[dow] || {});
 
+    // TRIER les plages par difficulte de couverture DECROISSANTE :
+    // Les plages les plus difficiles a couvrir (peu de candidats valides)
+    // sont traitees EN PREMIER pour garantir leur couverture.
+    // Au sein d'un meme niveau de difficulte : nuits avant tout.
+    const pj = [...pjBase].sort((a, b) => {
+      // Compter candidats valides (loi uniquement, pas convention)
+      const candsA = educs.filter(e => respecteLoi(e, d, ds, dow, a)).length;
+      const candsB = educs.filter(e => respecteLoi(e, d, ds, dow, b)).length;
+      // Ratio candidats/minimum : plus c'est bas, plus c'est difficile
+      const ratioA = candsA / Math.max(1, +a.min || 1);
+      const ratioB = candsB / Math.max(1, +b.min || 1);
+      if(Math.abs(ratioA - ratioB) > 0.5) return ratioA - ratioB; // difficulte diff
+      // Si difficulte similaire : nuits en premier
+      const nuitA = isNuit(a) ? -1 : 0;
+      const nuitB = isNuit(b) ? -1 : 0;
+      return nuitA - nuitB;
+    });
+
     // ============================================================
-    // PASSE A - P1+P2 : Couverture MINIMUM obligatoire
-    // On filtre d'abord par P1 (loi, absolu).
-    // Puis on applique P2 (convention) sauf si pas assez de candidats.
-    // Le score P3+P4 departage les candidats valides.
+    // PASSE A - P1+P2 : Couverture MINIMUM de TOUTES les plages d'abord
+    // On couvre le minimum de chaque plage avant de passer aux maximums.
+    // P1 (loi) = absolu. P2 (convention) = relachable si besoin.
     // ============================================================
     for(const plage of pj){
       const nuit   = isNuit(plage);
@@ -436,7 +469,7 @@ async function genMois(moisStr, L){
       // Etape A1 : candidats respectant P1 ET P2 (convention)
       let cands = educs.filter(e =>
         respecteLoi(e, d, ds, dow, plage) &&
-        respecteConvention(e, d, ds, plage)
+        respecteConvention(e, d, ds, plage, true)
       );
 
       // Etape A2 : si pas assez, on relache P2 (convention) mais PAS P1 (loi)
@@ -445,7 +478,7 @@ async function genMois(moisStr, L){
       if(cands.length < reqMin && !useAll){
         const candsLaxP2 = educs.filter(e =>
           respecteLoi(e, d, ds, dow, plage) &&
-          !(e.excls || []).includes(plage.id)  // excls reste bloque
+          !(e.excls || []).includes(plage.id)  // excls reste bloque (quota relache)
         );
         if(candsLaxP2.length >= reqMin){
           cands = candsLaxP2;
@@ -523,10 +556,10 @@ async function genMois(moisStr, L){
         .filter(e => {
           if(dejaDans.includes(e.id)) return false;
           if(!respecteLoi(e, d, ds, dow, plage)) return false;       // P1 absolu
-          if(!respecteConvention(e, d, ds, plage)) return false;     // P2 maintenu en passe B
-          // Besoin d'heures : solde + heures du mois < quota
+          if(!respecteConvention(e, d, ds, plage, false)) return false; // P2 sans blocage quota
+          // Besoin d'heures : on ajoute si pas encore au-dessus du quota + marge
           const soldeTotal = hist[e.id].solde + (tracker[e.id].h - quotaH[e.id]);
-          return soldeTotal < 5; // ne pas ajouter si deja bien au-dessus du quota
+          return soldeTotal < 15; // marge genereusse pour couvrir les nuits/WE
         })
         .map(e => ({ e, sc: score(e, d, ds, plage, we || ferie, pIds) }))
         .sort((a, b) => a.sc - b.sc)
