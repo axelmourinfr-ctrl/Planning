@@ -227,7 +227,13 @@ function calculerQuotasStructurels(hist, jours, moisStr, traj, besoins){
       if(isAbsent(e.id,dayStr(d))) joursAbsMois++;
     });
     const joursEffectifs=Math.max(0, besoins.joursOuv - joursAbsMois);
-    const baseMois=joursEffectifs*7.6*re;
+    // Cible realiste : jours ouvrables * 7.6h * ratio contrat
+    // Plafond supplementaire : heures contractuelles * ~4.33 semaines/mois
+    // Evite que les mi-temps (avec tous les jours coches) soient surcharges
+    const hSemContrat=getTargetH(e);
+    const nbSemMois=4.33;
+    const plafondContractuel=hSemContrat*nbSemMois*1.05; // 5% de marge
+    const baseMois=Math.min(joursEffectifs*7.6*re, plafondContractuel);
 
     // Ajustement trajectoire annuelle
     let ajustTraj=0;
@@ -744,6 +750,11 @@ function checkLoi(e,d,ds,dow,plage,tracker,lastPrest,minRepos,maxCons,reposNuit,
     if(hJour+dureeH(plage)>maxHJ) return{ok:false,raison:'Max h/jour'};
   }
   if(hSem(tracker[e.id],ds)+dureeH(plage)>50) return{ok:false,raison:'Max 50h/sem'};
+  // Plafond contractuel hebdomadaire : ne pas depasser 130% des heures du contrat
+  // Evite qu'un mi-temps (19h/sem) accumule 40h en une semaine
+  const hSemContratMax=getTargetH(e)*1.3;
+  if(hSem(tracker[e.id],ds)+dureeH(plage)>hSemContratMax && !isReunion(plage))
+    return{ok:false,raison:'Plafond contractuel semaine'};
   return{ok:true,raison:''};
 }
 
@@ -757,11 +768,22 @@ function checkConvention(e,d,ds,plage,niveau,tracker,hist,quotas,traj,maxWeMois)
 
   if(!re&&niveau===0){
     const tr=traj[e.id];
-    // Zone critique/danger -> pas de blocage quota heures (rattrapage force)
-    if(!tr||(tr.zone!=='danger'&&tr.zone!=='critique')){
-      const solde=(hist[e.id].solde||0)+(tracker[e.id].h-(quotas[e.id]?.h.cible||0));
-      if(solde>12) return{ok:false,raison:`Solde +${solde.toFixed(1)}h`,dur:false};
+    // Blocage solde mensuel strict
+    // Zone surplus/ok_positif : bloquer si solde > 8h au-dessus cible
+    // Zone danger/critique : ne pas bloquer (rattrapage force)
+    const soldeCourant=(hist[e.id].solde||0)+(tracker[e.id].h-(quotas[e.id]?.h.cible||0));
+    const hCibleE=quotas[e.id]?.h.cible||0;
+    // Toujours bloquer si on depasse la cible de plus de 8h (sauf zone danger)
+    if(tr&&(tr.zone==='danger'||tr.zone==='critique')){
+      // Zone urgence : autoriser jusqu'a +15h
+      if(soldeCourant>15) return{ok:false,raison:'Solde +'+soldeCourant.toFixed(1)+'h',dur:false};
+    } else {
+      // Zone normale : bloquer strictement a +8h
+      if(soldeCourant>8) return{ok:false,raison:'Solde +'+soldeCourant.toFixed(1)+'h',dur:false};
     }
+    // Bloquer aussi si l'educ a deja fait 110% de sa cible mensuelle
+    if(hCibleE>0 && tracker[e.id].h > hCibleE*1.10)
+      return{ok:false,raison:'Cible mensuelle depassee',dur:false};
 
     // Verification quota plage structurel (V20 : strict)
     const myCP=(tracker[e.id].plageCount[plage.id]||0);
@@ -1179,7 +1201,11 @@ async function genMois(moisStr,L){
           });
         }
 
-        // Si rotation insuffisante : completer avec les meilleurs candidats restants
+        // BLOC WE ATOMIQUE : verifier que les memes educs sont sur sam ET dim
+        // Si plage couvre sam ET dim, forcer coherence
+        // (le meme educ doit etre sur les deux jours du WE)
+
+      // Si rotation insuffisante : completer avec les meilleurs candidats restants
         if(assigned.length<reqMin){
           const dejaIds=new Set(assigned.map(e=>e.id));
           const candidatsSupp=educs.filter(e=>{
