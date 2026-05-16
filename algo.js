@@ -3,31 +3,31 @@
 // ============================================================
 // PHILOSOPHIE : Horaire humain, stable, institutionnel
 //
-// Le moteur fonctionne comme un chef educateur experimente :
+// Le moteur fonctionne comme un chef éducateur expérimenté :
 // - il conserve les habitudes existantes
 // - il ne change que ce qui doit changer
-// - il fait tourner uniquement le penible (nuits, WE, feries)
+// - il fait tourner uniquement le pénible (nuits, WE, fériés)
 // - il compense progressivement, jamais brutalement
 //
 // HIERARCHIE ABSOLUE :
 //  P1 - LOI           : repos 11h, 50h/sem, max consec, nuits consec
-//  P2 - EQUITE HEURES : +/-15h/mois dur, 0 trimestriel
-//  P3 - STABILITE     : patterns, habitudes, semaines repetitives
-//  P4 - ROTATION DOUCE: nuits/WE/feries tournent progressivement
-//  P5 - PREFERENCES   : demandes educs
-//  P6 - MAXIMUM       : remplir si solde negatif
+//  P2 - EQUITE HEURES : ±15h/mois dur, 0 trimestriel
+//  P3 - STABILITE     : patterns, habitudes, semaines répétitives
+//  P4 - ROTATION DOUCE: nuits/WE/fériés tournent progressivement
+//  P5 - PREFERENCES   : demandes éducs
+//  P6 - MAXIMUM       : remplir si solde négatif
 //
 // 3 ETAPES :
 //  1. Construction stable (patterns + habitudes)
-//  2. Analyse equite
-//  3. Micro-ajustements cibles (swaps nuits/WE seulement)
+//  2. Analyse équité
+//  3. Micro-ajustements ciblés (swaps nuits/WE seulement)
 // ============================================================
 
 const DEBUG_MODE = false;
 
-// -- Helpers de base --
+// ── Helpers de base ──
 const isNuitP  = p => p.type==='nuit'||p.debut>='22:00'||(p.fin<='07:00'&&p.fin>'00:00');
-const isReunion= p => p.type==='reunion'||(p.nom||'').toLowerCase().includes('reunion')||(p.nom||'').toLowerCase().includes('reunion');
+const isReunion= p => p.type==='reunion'||(p.nom||'').toLowerCase().includes('reunion')||(p.nom||'').toLowerCase().includes('réunion');
 const isWEDay  = d => d.getDay()===0||d.getDay()===6;
 const dowIdx   = d => d.getDay()===0?6:d.getDay()-1;
 const ratioE   = e => getTargetH(e)/38;
@@ -64,7 +64,7 @@ function loadPatterns(){ try{return JSON.parse(localStorage.getItem('planeduc_v3
 function savePatterns(p){ try{localStorage.setItem('planeduc_v3_patterns',JSON.stringify(p));}catch(e){} }
 
 function buildPatterns(moisStr){
-  // Analyser les 4 derniers mois pour extraire les habitudes reelles
+  // Analyser les 4 derniers mois pour extraire les habitudes réelles
   const [yr,mo]=moisStr.split('-').map(Number);
   const patterns=loadPatterns();
   for(let i=1;i<=4;i++){
@@ -88,14 +88,14 @@ function buildPatterns(moisStr){
   return patterns;
 }
 
-// Bonus de stabilite -- FORT pour les habitudes ancrees
-// Un educateur qui a "toujours" fait cette plage ce jour est tres prioritaire
+// Bonus de stabilité — FORT pour les habitudes ancrées
+// Un éducateur qui a "toujours" fait cette plage ce jour est très prioritaire
 function bonusStabilite(e,dow,plage,patterns){
   const pat=patterns[String(e.id)];
   if(!pat||!pat[dow]||!pat[dow][plage.id]) return 0;
   const cnt=pat[dow][plage.id]||0;
   // Progression forte : l'habitude s'ancre exponentiellement
-  if(cnt>=8)  return -35; // tres forte habitude -> tres prioritaire
+  if(cnt>=8)  return -35; // très forte habitude → très prioritaire
   if(cnt>=6)  return -28;
   if(cnt>=4)  return -20;
   if(cnt>=2)  return -12;
@@ -184,7 +184,7 @@ function detecterImpossibilites(moisStr){
 }
 
 // ================================================================
-// CALCUL QUOTAS (avec equite progressive douce)
+// CALCUL QUOTAS (avec équité progressive douce)
 // ================================================================
 function calculerQuotas(hist,jours,moisStr){
   const [yr,mo]=moisStr.split('-').map(Number);
@@ -196,7 +196,7 @@ function calculerQuotas(hist,jours,moisStr){
   educs.forEach(e=>{
     const re=ratioE(e);
     const base=joursOuv*7.6*re;
-    // Correction douce du solde : max +/-6h (progressive, pas brutale)
+    // Correction douce du solde : max ±6h (progressive, pas brutale)
     const ajust=Math.max(-6,Math.min(6,-(hist[e.id].solde||0)*0.35));
     quotas[e.id]={
       h:{cible:base+ajust, min:base-15, max:base+15},
@@ -213,11 +213,11 @@ function calculerQuotas(hist,jours,moisStr){
       }).length;
       const totalPostes=ja*(+p.min||1);
       const cible=totalPostes*re/Math.max(0.01,poidsTotal);
-      // Correction historique tres douce (0.2) pour ne pas casser la stabilite
+      // Correction historique très douce (0.2) pour ne pas casser la stabilité
       const myN=(hist[e.id].plageCount[p.id]||0)/Math.max(0.01,re);
       const avgN=moyPond(educs,x=>hist[x.id].plageCount[p.id]||0);
       const corr=(myN-avgN)*re*0.2;
-      // Correction annuelle nuits (tres legere)
+      // Correction annuelle nuits (très légère)
       const corrAnn=isNuitP(p)?Math.max(-1,Math.min(1,(norm((annStats[e.id]||{}).nuits||0,e)-moyPond(educs,x=>(annStats[x.id]||{}).nuits||0))*re*0.1)):0;
       const c=Math.max(0,cible-corr-corrAnn);
       quotas[e.id].plage[p.id]={cible:c,min:Math.max(0,Math.floor(c-2)),max:Math.ceil(c+2)};
@@ -262,7 +262,7 @@ function preAllouerNuits(jours,hist,moisStr){
         if(cpt[e.id].lastNuit&&Math.round((d-new Date(cpt[e.id].lastNuit))/86400000)<=1) return false;
         return true;
       }).sort((a,b)=>{
-        // Trier par nuits normalisees (annuel inclus) : moins de nuits = prioritaire
+        // Trier par nuits normalisées (annuel inclus) : moins de nuits = prioritaire
         const nA=norm((hist[a.id].nuits||0)+((annStats[a.id]||{}).nuits||0)+cpt[a.id].nuits,a);
         const nB=norm((hist[b.id].nuits||0)+((annStats[b.id]||{}).nuits||0)+cpt[b.id].nuits,b);
         return nA-nB;
@@ -337,7 +337,7 @@ async function lancer(){
   buildPatterns(mois);
 
   const qs=planningQualityScore(validation);
-  L(`Score qualite : ${qs.score}/100 -- ${qs.label}`,null);
+  L(`Score qualite : ${qs.score}/100 — ${qs.label}`,null);
   if(validation.errors.length) L(`⚠ ${validation.errors.length} poste(s) non couverts`,null);
   validation.warnings.slice(0,6).forEach(w=>L('! '+w,null));
   result.warnings.slice(0,4).forEach(w=>L('! '+w,null));
@@ -345,12 +345,12 @@ async function lancer(){
 
   btn.disabled=false; btn.innerHTML="Generer l'horaire";
   const at=validation.errors.length?'warn':'ok';
-  showAlert('gen-alerts',at,`Horaire genere -- Score : ${qs.score}/100 (${qs.label})${validation.errors.length?' -- '+validation.errors.length+' poste(s) non couvert(s)':''}`);
+  showAlert('gen-alerts',at,`Horaire genere — Score : ${qs.score}/100 (${qs.label})${validation.errors.length?' — '+validation.errors.length+' poste(s) non couvert(s)':''}`);
   updateMonthLabels();
 }
 
 // ================================================================
-// MOTEUR PRINCIPAL -- 3 ETAPES
+// MOTEUR PRINCIPAL — 3 ETAPES
 // ================================================================
 async function genMois(moisStr,L){
   _pm=null; _em=null;
@@ -367,7 +367,7 @@ async function genMois(moisStr,L){
   L('Etape 1 : Historique et patterns...',6); await sl(30);
   const lockedSlots=getLockedSlots(moisStr);
 
-  // -- HISTORIQUE --
+  // ── HISTORIQUE ──
   const hist={};
   educs.forEach(e=>{
     hist[e.id]={solde:0,plageCount:{},we:0,ferie:0,nuits:0,types:{matin:0,aprem:0,soir:0,nuit:0,reunion:0}};
@@ -402,7 +402,7 @@ async function genMois(moisStr,L){
   const patterns=buildPatterns(moisStr);
   const preAlloc=preAllouerNuits(jours,hist,moisStr);
 
-  // -- TRACKER --
+  // ── TRACKER ──
   const tracker={};
   const lastPrest={};
   educs.forEach(e=>{
@@ -425,14 +425,14 @@ async function genMois(moisStr,L){
     });
   });
 
-  // -- P1 : LOI --
+  // ── P1 : LOI ──
   function checkLoi(e,d,ds,dow,plage){
-    if(!(e.jours||[]).includes(dow)) return {ok:false,raison:'Jour non travaille'};
-    if(isAbsent(e.id,ds)) return {ok:false,raison:'Absence encodee'};
+    if(!(e.jours||[]).includes(dow)) return {ok:false,raison:'Jour non travaillé'};
+    if(isAbsent(e.id,ds)) return {ok:false,raison:'Absence encodée'};
     const t=tracker[e.id], re=isReunion(plage);
     if(!re){
-      if(t.cons>=maxCons) return {ok:false,raison:`Max ${maxCons}j consecutifs`};
-      if(isNuitP(plage)&&t.nuitsC>=maxNuitsC) return {ok:false,raison:'Max 2 nuits consecutives'};
+      if(t.cons>=maxCons) return {ok:false,raison:`Max ${maxCons}j consécutifs`};
+      if(isNuitP(plage)&&t.nuitsC>=maxNuitsC) return {ok:false,raison:'Max 2 nuits consécutives'};
       const la=lastPrest[e.id];
       if(la){
         const [lh,lm]=la.fin.split(':').map(Number);
@@ -443,7 +443,7 @@ async function genMois(moisStr,L){
         if(dh>=0&&dh<minRepos) return {ok:false,raison:`Repos 11h (${dh.toFixed(1)}h dispo)`};
       }
       if(la&&la.isNuit&&reposNuit>0&&Math.round((d-new Date(la.date))/86400000)<=reposNuit)
-        return {ok:false,raison:'Repos apres nuit'};
+        return {ok:false,raison:'Repos après nuit'};
       const maxHJ=isNuitP(plage)?14:11;
       const hJour=plages.filter(p2=>!isReunion(p2)).reduce((s,pp)=>{
         const ids=(planning[ds]||{})[pp.id];
@@ -457,7 +457,7 @@ async function genMois(moisStr,L){
 
   function checkConvention(e,d,ds,plage,niveau){
     const re=isReunion(plage);
-    if(niveau<2&&!re&&(e.excls||[]).includes(plage.id)) return {ok:false,raison:'Plage refusee',bloquant:true};
+    if(niveau<2&&!re&&(e.excls||[]).includes(plage.id)) return {ok:false,raison:'Plage refusée',bloquant:true};
     if(!re&&isWEDay(d)&&tracker[e.id].weCount>=maxWeMois&&niveau<1) return {ok:false,raison:'Max WE/mois',bloquant:false};
     if(!re&&niveau===0){
       // Solde heures : contrainte quasi-dure
@@ -472,9 +472,9 @@ async function genMois(moisStr,L){
     return {ok:true,raison:''};
   }
 
-  // -- SCORE --
+  // ── SCORE ──
   // La STABILITE a le poids le plus fort pour les prestations normales
-  // La ROTATION ne s'applique fort qu'aux nuits/WE/feries
+  // La ROTATION ne s'applique fort qu'aux nuits/WE/fériés
   function score(e,d,ds,plage,weOrFerie,preAllocIds,dow){
     const t=tracker[e.id],ht=hist[e.id],re=ratioE(e),q=quotas[e.id];
     const annS=loadAnnualStats()[moisStr.split('-')[0]]||{};
@@ -482,9 +482,9 @@ async function genMois(moisStr,L){
     const reunion=isReunion(plage), nuit=isNuitP(plage);
     let sc=0;
 
-    // -- P2 : Solde heures (quasi-contrainte dure) --
+    // ── P2 : Solde heures (quasi-contrainte dure) ──
     const solde=ht.solde+(t.h-q.h.cible);
-    // Progressif : fort seulement quand on approche +/-15h
+    // Progressif : fort seulement quand on approche ±15h
     if(solde>12)       sc+=40;  // fort blocage
     else if(solde>8)   sc+=20;
     else if(solde>4)   sc+=8;
@@ -494,43 +494,43 @@ async function genMois(moisStr,L){
     else sc+=solde*1.5; // zone normale : influence douce
 
     if(!reunion){
-      // -- P3 : STABILITE (poids FORT pour prestations normales) --
+      // ── P3 : STABILITE (poids FORT pour prestations normales) ──
       if(!nuit&&!weOrFerie){
-        // Pour matins/apres-midis/soirs normaux : bonus de stabilite tres fort
+        // Pour matins/après-midis/soirs normaux : bonus de stabilité très fort
         sc+=bonusStabilite(e,dow,plage,patterns)*1.5;
       } else {
-        // Pour nuits/WE/feries : bonus de stabilite normal
+        // Pour nuits/WE/fériés : bonus de stabilité normal
         sc+=bonusStabilite(e,dow,plage,patterns);
       }
 
-      // Bonus si c'est dans la pre-allocation (nuits)
+      // Bonus si c'est dans la pré-allocation (nuits)
       if(preAllocIds&&preAllocIds.includes(e.id)) sc-=12;
 
-      // -- P4 : ROTATION pour le penible (nuits/WE/feries) --
-      // Pour les matins/soirs normaux : equite tres douce
+      // ── P4 : ROTATION pour le pénible (nuits/WE/fériés) ──
+      // Pour les matins/soirs normaux : équité très douce
       const tp=typePlage(plage);
 
-      // Equite plage (normalisee par contrat)
+      // Equité plage (normalisée par contrat)
       const myCP=norm((ht.plageCount[plage.id]||0)+(t.plageCount[plage.id]||0),e);
       const avgCP=moyPond(educs,x=>(hist[x.id].plageCount[plage.id]||0)+(tracker[x.id].plageCount[plage.id]||0));
       const ecP=myCP-avgCP;
       if(nuit||weOrFerie){
-        // Rotation forte pour le penible
+        // Rotation forte pour le pénible
         sc+=ecP*12;
         if(ecP<-1.5) sc-=18; if(ecP>1.5) sc+=15;
       } else {
-        // Rotation tres douce pour le normal
+        // Rotation très douce pour le normal
         sc+=ecP*4;
       }
 
-      // Equite type (nuit/soir/matin)
+      // Equité type (nuit/soir/matin)
       const myTP=norm((ht.types[tp]||0)+(t.types[tp]||0),e);
       const avgTP=moyPond(educs,x=>(hist[x.id].types[tp]||0)+(tracker[x.id].types[tp]||0));
       const ecT=myTP-avgTP;
       if(nuit||weOrFerie){
         sc+=ecT*10; if(ecT<-1)sc-=12; if(ecT>1)sc+=10;
       } else {
-        sc+=ecT*3; // tres doux pour le normal
+        sc+=ecT*3; // très doux pour le normal
       }
 
       // WE (annuel+mensuel)
@@ -541,7 +541,7 @@ async function genMois(moisStr,L){
         sc+=ecWE*11; if(ecWE<-1)sc-=14; if(ecWE>1)sc+=11;
       }
 
-      // Feries
+      // Fériés
       if(isFerie(ds)){
         const myF=norm((ht.ferie||0)+(ann.feries||0),e);
         const avgF=moyPond(educs,x=>(hist[x.id].ferie||0)+((annS[x.id]||{}).feries||0));
@@ -556,11 +556,11 @@ async function genMois(moisStr,L){
         sc+=ecN*15; if(ecN<-1.5)sc-=22; if(ecN>1.5)sc+=18;
       }
 
-      // Fatigue (legere penalite)
+      // Fatigue (légère pénalité)
       sc+=t.fatigue*0.5;
     }
 
-    // -- P5 : Preferences --
+    // ── P5 : Préférences ──
     if(!reunion&&(e.prefs||[]).includes(plage.id)) sc-=10;
     const dow2=d.getDay()===0?6:d.getDay()-1;
     (e.demandes||[]).forEach(dem=>{
@@ -570,7 +570,7 @@ async function genMois(moisStr,L){
       }
     });
 
-    // Eviter double terrain (sauf pause acceptee)
+    // Eviter double terrain (sauf pause acceptée)
     if(!reunion&&!e.acceptePause){
       const dejaTerrain=Object.keys(planning[ds]||{}).some(pid=>{
         if(pid.startsWith('_')) return false;
@@ -607,125 +607,6 @@ async function genMois(moisStr,L){
   // ================================================================
   L('Etape 2 : Generation...',25);
 
-  // ================================================================
-  // PRE-ATTRIBUTION WE ATOMIQUE (sam+dim ensemble)
-  // Principe : pour chaque WE du mois, attribuer toutes les plages
-  // en garantissant que le MEME educ couvre sam ET dim.
-  // Un educ qui travaille le WE N est au repos le WE N+1.
-  // ================================================================
-
-  // Grouper les jours par numero de WE
-  const weMap={};let weNum=0,lastSatSeen=-1;
-  jours.forEach(d=>{
-    if(d.getDay()===6){weNum++;lastSatSeen=d.getDate();}
-    if(d.getDay()===0&&lastSatSeen<0)weNum++;
-    if(isWEDay(d)) weMap[dayStr(d)]=weNum;
-  });
-  const weNums=[...new Set(Object.values(weMap))].sort((a,b)=>a-b);
-
-  // Lire le dernier WE du mois precedent pour la rotation
-  const prevKey2=moisKey(yr,mo-1);
-  const planPrevWE=horaire[prevKey2]||{};
-  const dernierWEPrevIds=new Set();
-  const joursPrevMois=getDays(yr,mo-1);
-  const derniersDim=joursPrevMois.filter(d=>d.getDay()===0).sort((a,b)=>b-a);
-  if(derniersDim.length){
-    const dsLastDim=dayStr(derniersDim[0]);
-    const dsLastSam=dayStr(new Date(derniersDim[0].getTime()-86400000));
-    [dsLastSam,dsLastDim].forEach(ds=>{
-      Object.entries(planPrevWE[ds]||{}).forEach(([pid,ids])=>{
-        if(pid.startsWith('_')||!Array.isArray(ids))return;
-        ids.forEach(id=>dernierWEPrevIds.add(+id));
-      });
-    });
-  }
-
-  // preWE[ds][plageId] = [educId,...] -- attributions WE atomiques
-  const preWE={};
-  // weParEduc : qui a travaille quels WE ce mois (pour la rotation)
-  const weParEduc={};
-  educs.forEach(e=>{weParEduc[e.id]=new Set();});
-
-  // Plages actives le WE (sam=5 ou dim=6 dans notre convention dowIdx)
-  const plagesWE=plages.filter(p=>
-    !isReunion(p)&&(p.jours.includes(5)||p.jours.includes(6))
-  );
-
-  for(const wn of weNums){
-    const joursWE=jours.filter(d=>weMap[dayStr(d)]===wn).sort((a,b)=>a-b);
-    if(!joursWE.length)continue;
-    const samJ=joursWE.find(d=>d.getDay()===6);
-    const dimJ=joursWE.find(d=>d.getDay()===0);
-
-    // Qui est en repos ce WE (a travaille le WE precedent) ?
-    const enRepos=new Set();
-    if(wn===weNums[0]){
-      dernierWEPrevIds.forEach(id=>enRepos.add(id));
-    } else {
-      const wnPrec=weNums[weNums.indexOf(wn)-1];
-      educs.forEach(e=>{if((weParEduc[e.id]||new Set()).has(wnPrec))enRepos.add(e.id);});
-    }
-
-    for(const plage of plagesWE){
-      // Jours de cette plage dans ce WE
-      const slotsP=joursWE.filter(d=>plage.jours.includes(dowIdx(d)));
-      if(!slotsP.length)continue;
-      const reqMin=+plage.min||1;
-
-      // Candidats : dispo sur TOUS les jours de la plage dans ce WE
-      // + pas en repos rotation (sauf fallback)
-      const cands=educs.filter(e=>{
-        if((e.excls||[]).includes(plage.id))return false;
-        for(const d of slotsP){
-          if(!(e.jours||[]).includes(dowIdx(d)))return false;
-          if(isAbsent(e.id,dayStr(d)))return false;
-        }
-        return true;
-      });
-
-      // Candidats respectant la rotation
-      let candsRot=cands.filter(e=>!enRepos.has(e.id));
-      // Fallback si pas assez
-      if(candsRot.length<reqMin)candsRot=cands;
-
-      // Scorer : equite WE (annuel+historique) + solde heures
-      const annS2=loadAnnualStats()[String(yr)]||{};
-      const scored=candsRot.map(e=>{
-        const ht=hist[e.id];
-        const ann2=annS2[e.id]||{};
-        const myWE=norm((ht.we||0)+(ann2.we||0),e);
-        const avgWE=moyPond(educs,x=>(hist[x.id].we||0)+((annS2[x.id]||{}).we||0));
-        let sc=(myWE-avgWE)*15;
-        if(myWE<avgWE-1)sc-=20;
-        if(myWE>avgWE+1)sc+=20;
-        const solde=ht.solde+(tracker[e.id].h-(quotas[e.id]?.h.cible||0));
-        if(solde<-10)sc-=30;else if(solde<-5)sc-=15;
-        else if(solde>10)sc+=30;else if(solde>5)sc+=15;
-        if(isNuitP(plage)){
-          const myN=norm((ht.nuits||0)+(ann2.nuits||0),e);
-          const avgN=moyPond(educs,x=>(hist[x.id].nuits||0)+((annS2[x.id]||{}).nuits||0));
-          sc+=(myN-avgN)*12;
-        }
-        return{e,sc};
-      }).sort((a,b)=>a.sc-b.sc);
-
-      const assigned=scored.slice(0,reqMin).map(x=>x.e);
-
-      // Enregistrer dans preWE pour chaque jour du slot
-      slotsP.forEach(d=>{
-        const ds=dayStr(d);
-        if(!preWE[ds])preWE[ds]={};
-        preWE[ds][plage.id]=assigned.map(e=>e.id);
-      });
-
-      // Marquer comme ayant travaille ce WE
-      assigned.forEach(e=>{
-        if(!weParEduc[e.id])weParEduc[e.id]=new Set();
-        weParEduc[e.id].add(wn);
-      });
-    }
-  }
-
   for(let di=0;di<jours.length;di++){
     if(di%3===0){L(`Jour ${di+1}/${jours.length}`,25+Math.round((di/jours.length)*55));await sl(0);}
     const d=jours[di],ds=dayStr(d),dow=dowIdx(d);
@@ -744,28 +625,10 @@ async function genMois(moisStr,L){
       });
     }
 
-    // Injecter les attributions WE atomiques pre-calculees
-    // Ces attributions sont verrouillees : la passe A ne les ecrase pas
-    if(we && preWE[ds]){
-      Object.entries(preWE[ds]).forEach(([pid,ids])=>{
-        if(lockedSlots[ds]&&lockedSlots[ds][pid])return; // deja verrouille manuellement
-        planning[ds][+pid]=ids;
-        planning[ds]['_bloc_we_'+pid]='we_bloc'; // marqueur bloc WE
-        const p=plageById(+pid);if(!p)return;
-        ids.forEach(eid=>{
-          const e=educById(+eid);if(!e)return;
-          planning[ds][`_s_${eid}_${pid}`]='neutral';
-          updateTracker(e,d,ds,p,isNuitP(p)&&!isReunion(p),true);
-        });
-        if(ids.length<(+p.min||1))
-          warnings.push(`${ds} - ${p.nom}: ${ids.length}/${p.min} (WE incomplet)`);
-      });
-    }
-
     const dowForPlages=(ferie&&!we)?5:dow;
     const pjBase=plages.filter(p=>p.jours.includes(dowForPlages));
 
-    // Ordre : nuits->WE/feries->longues->reste->reunions
+    // Ordre : nuits→WE/fériés→longues→reste→réunions
     function prio(p){
       if(isReunion(p)) return 10;
       if(isNuitP(p))   return 0;
@@ -782,11 +645,9 @@ async function genMois(moisStr,L){
 
     const preAllocJour=preAlloc[ds]||{};
 
-    // -- PASSE A : Minimum obligatoire --
+    // ── PASSE A : Minimum obligatoire ──
     for(const plage of pj){
       if(lockedSlots[ds]&&lockedSlots[ds][plage.id]) continue;
-      // Sauter les plages WE deja attribuees en pre-attribution atomique
-      if(we && preWE[ds] && preWE[ds][plage.id]!==undefined) continue;
       const nuit=isNuitP(plage)&&!isReunion(plage);
       const reqMin=Math.max(0,+plage.min||1), useAll=plage.tous;
       const pIds=preAllocJour[plage.id]||[];
@@ -803,7 +664,7 @@ async function genMois(moisStr,L){
         cands.push(e);
       });
 
-      // Niveaux de relachement
+      // Niveaux de relâchement
       if(cands.length<reqMin&&!useAll)
         cands=educs.filter(e=>checkLoi(e,d,ds,dow,plage).ok&&checkConvention(e,d,ds,plage,1).ok);
       if(cands.length<reqMin&&!useAll){
@@ -816,7 +677,7 @@ async function genMois(moisStr,L){
       const assigned=scored.slice(0,n).map(x=>x.e);
 
       planning[ds][plage.id]=assigned.map(e=>e.id);
-      assigned.forEach(e=>diagD.push({nom:e.prenom+' '+e.nom,ini:(e.prenom[0]+e.nom[0]).toUpperCase(),color:e.color||'#888',ok:true,raison:'Assigne'}));
+      assigned.forEach(e=>diagD.push({nom:e.prenom+' '+e.nom,ini:(e.prenom[0]+e.nom[0]).toUpperCase(),color:e.color||'#888',ok:true,raison:'Assigné'}));
 
       if(assigned.length<reqMin||(nuit||we||ferie))
         diagnostic.push({ds,plage:plage.nom,couverte:assigned.length>=reqMin,details:diagD});
@@ -827,8 +688,8 @@ async function genMois(moisStr,L){
         const dow2=d.getDay()===0?6:d.getDay()-1;
         const dem=(e.demandes||[]).find(x=>x.jour===dow2&&(x.plageIds||[]).includes(plage.id));
         const sk=`_s_${e.id}_${plage.id}`;
-        if(isExcl){planning[ds][sk]='forced';warnings.push(`${ds} - ${plage.nom}: refusee assignee a ${e.prenom}`);}
-        else if(dem&&dem.type==='eviter'){planning[ds][sk]='dem_evite';warnings.push(`${ds} - ${plage.nom}: demande de ${e.prenom} non respectee`);}
+        if(isExcl){planning[ds][sk]='forced';warnings.push(`${ds} - ${plage.nom}: refusée assignée à ${e.prenom}`);}
+        else if(dem&&dem.type==='eviter'){planning[ds][sk]='dem_evite';warnings.push(`${ds} - ${plage.nom}: demande de ${e.prenom} non respectée`);}
         else if(dem&&dem.type==='prefere') planning[ds][sk]='dem_pref';
         else if(isPref) planning[ds][sk]='pref';
         else planning[ds][sk]='neutral';
@@ -839,11 +700,10 @@ async function genMois(moisStr,L){
         warnings.push(`${ds} - ${plage.nom}: ${reqMin-assigned.length} poste(s) non couvert(s)`);
     }
 
-    // -- PASSE B : Maximum --
+    // ── PASSE B : Maximum ──
     for(const plage of pj){
       if(plage.tous||isReunion(plage)) continue;
       if(lockedSlots[ds]&&lockedSlots[ds][plage.id]) continue;
-      if(we && preWE[ds] && preWE[ds][plage.id]!==undefined) continue;
       const reqMin=Math.max(0,+plage.min||1),reqMax=Math.max(reqMin,+plage.max||reqMin);
       if(reqMax<=reqMin) continue;
       const deja=(planning[ds][plage.id]||[]).map(x=>+x);
@@ -866,12 +726,12 @@ async function genMois(moisStr,L){
   }
 
   // ================================================================
-  // ETAPE 3 : MICRO-AJUSTEMENTS (swaps cibles nuits/WE seulement)
+  // ETAPE 3 : MICRO-AJUSTEMENTS (swaps ciblés nuits/WE seulement)
   // Ne pas toucher les matins/soirs stables !
   // ================================================================
   L('Etape 3 : Micro-ajustements...',83); await sl(30);
 
-  // Swaps uniquement pour nuits et WE -- pas pour les prestations normales
+  // Swaps uniquement pour nuits et WE — pas pour les prestations normales
   const passesSwap=[
     {nom:'nuits',keyFn:e=>norm((hist[e.id].nuits||0)+(tracker[e.id].nuits||0),e),filtre:p=>isNuitP(p)&&!isReunion(p),maxSwaps:50},
     {nom:'WE',   keyFn:e=>norm((hist[e.id].we||0)+(tracker[e.id].weCount||0),e),filtre:p=>!isReunion(p),maxSwaps:25},
@@ -896,7 +756,7 @@ async function genMois(moisStr,L){
             for(const eOut of educs.filter(e=>!ids.includes(e.id))){
               if(pass.keyFn(eOut)>=sIn-1.5) continue;
               if(!swapValide(planning,ds,plage,idIn,eOut.id,reqMin,dow)) continue;
-              // Verifier que ca n'empire pas le solde heures
+              // Vérifier que ça n'empire pas le solde heures
               const soldIn=hist[eIn.id].solde+(tracker[eIn.id].h-quotas[eIn.id].h.cible);
               const soldOut=hist[eOut.id].solde+(tracker[eOut.id].h-quotas[eOut.id].h.cible);
               if(soldOut-dureeH(plage)<-14) continue; // ne pas mettre eOut sous -15h
@@ -953,7 +813,7 @@ function swapValide(planning,ds,plage,idIn,idOut,reqMin,dow){
 }
 
 // ================================================================
-// VALIDATION (toujours sauvegarder -- planning partiel accepte)
+// VALIDATION (toujours sauvegarder — planning partiel accepté)
 // ================================================================
 function validatePlanning(planning,moisStr,tracker,quotas){
   const [yr,mo]=moisStr.split('-').map(Number);
@@ -1007,6 +867,6 @@ function validatePlanning(planning,moisStr,tracker,quotas){
 function planningQualityScore(validation){
   const m=validation.metrics||{equite:50,stabilite:50,couverture:50,prefs:50};
   const score=Math.round(m.equite*0.30+m.stabilite*0.30+m.couverture*0.30+m.prefs*0.10);
-  const label=score>=85?'Excellent':score>=70?'Bon':score>=55?'Moyen':'A ameliorer';
+  const label=score>=85?'Excellent':score>=70?'Bon':score>=55?'Moyen':'À améliorer';
   return {score,label,details:m};
 }

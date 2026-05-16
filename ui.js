@@ -1,17 +1,13 @@
 // ============================================================
-// ui.js - PlanEduc Pro V20
-// Interface utilisateur : navigation, formulaires, modals
-// Ajouts V20 :
-//   - renderDiagnostic enrichi (equipes WE + pression trimestrielle)
-//   - badge "Nuit Ven" sur les plages detectees
+// ui.js - Interface utilisateur : navigation, formulaires, modals
 // ============================================================
 
-// -- Initialisation --
+// ── Initialisation ──
 window.onload = () => {
   const now = new Date();
-  document.getElementById('gen-mois').value   = now.toISOString().slice(0,7);
-  document.getElementById('fiche-mois').value  = now.toISOString().slice(0,7);
-  document.getElementById('ferie-yr').value    = now.getFullYear();
+  document.getElementById('gen-mois').value  = now.toISOString().slice(0,7);
+  document.getElementById('fiche-mois').value = now.toISOString().slice(0,7);
+  document.getElementById('ferie-yr').value  = now.getFullYear();
   currentMonth = now.toISOString().slice(0,7);
   load();
   renderAll();
@@ -26,26 +22,54 @@ function renderAll(){
   renderAbsList();
   renderAbsEduc();
   renderFicheEduc();
-  document.getElementById('nb-educ').textContent   = educs.length;
-  document.getElementById('nb-plages').textContent  = plages.length;
+  document.getElementById('nb-educ').textContent  = educs.length;
+  document.getElementById('nb-plages').textContent = plages.length;
 }
 
-// -- Navigation principale --
+// ── Navigation principale ──
 function nav(el, page){
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   el.classList.add('active');
   document.getElementById('page-'+page).classList.add('active');
-  if(page==='horaire')    renderHoraire();
-  if(page==='fiche')      renderFiche();
-  if(page==='soldes')     renderSoldes();
-  if(page==='stats')      renderStats();
-  if(page==='feries')     renderFeries();
-  if(page==='absences')   renderAbsList();
+  if(page==='horaire')  renderHoraire();
+  if(page==='fiche')    renderFiche();
+  if(page==='soldes')   renderSoldes();
+  if(page==='stats')    renderStats();
+  if(page==='feries')   renderFeries();
+  if(page==='absences') renderAbsList();
   if(page==='diagnostic') renderDiagnostic();
 }
 
-// -- Onglets internes --
+// ── Diagnostic ──
+function renderDiagnostic(){
+  const el=document.getElementById('page-diagnostic'); if(!el) return;
+  const diag=window._lastDiagnostic||[];
+  if(!diag.length){
+    el.innerHTML=`<div class="page-title">🔍 Diagnostic génération</div><div class="page-sub">Aucun diagnostic disponible. Générez un horaire d'abord.</div><div class="empty"><div class="icon">🔍</div><p>Générez un horaire pour voir le diagnostic.</p></div>`;
+    return;
+  }
+  let html='<div class="page-title">🔍 Diagnostic génération</div>';
+  html+='<div class="page-sub">Détail des refus et contraintes lors de la dernière génération</div>';
+  diag.forEach(function(d){
+    html+='<div class="card" style="margin-bottom:10px">';
+    html+='<div class="card-hd"><div class="card-title">'+d.ds+' — '+d.plage+'</div>';
+    html+='<span class="badge '+(d.couverte?'b-green':'b-red')+'">'+(d.couverte?'✅ Couverte':'⚠ Non couverte')+'</span></div>';
+    html+='<div style="font-size:.78rem;margin-top:8px">';
+    d.details.forEach(function(r){
+      html+='<div style="display:flex;align-items:center;gap:8px;padding:3px 0;border-bottom:1px solid var(--border)">';
+      html+='<div class="avatar" style="background:'+r.color+';width:26px;height:26px;font-size:.65rem;flex-shrink:0">'+r.ini+'</div>';
+      html+='<span style="font-weight:600;min-width:100px">'+r.nom+'</span>';
+      var couleur=r.ok?'var(--green)':'var(--red)';
+      html+='<span style="color:'+couleur+'">'+(r.ok?'✅ Assigné':'❌ '+r.raison)+'</span>';
+      html+='</div>';
+    });
+    html+='</div></div>';
+  });
+  el.innerHTML=html;
+}
+
+// ── Onglets internes ──
 function itab(el, id){
   el.parentElement.querySelectorAll('.itab').forEach(t=>t.classList.remove('on'));
   el.classList.add('on');
@@ -55,7 +79,7 @@ function itab(el, id){
   document.getElementById(id).style.display = '';
 }
 
-// -- Pills --
+// ── Pills (cases à cocher stylisées) ──
 function togglePill(el){
   const cb = el.querySelector('input[type=checkbox]');
   if(!cb) return;
@@ -73,7 +97,7 @@ function updateHField(){
   document.getElementById('me-h-field').style.display = v==='perso' ? '' : 'none';
 }
 
-// -- Modals --
+// ── Modals ──
 function openModal(id, initFn){ if(initFn) initFn(); document.getElementById(id).style.display='flex'; }
 function closeModal(id){ document.getElementById(id).style.display='none'; }
 function bgClose(e, id){ if(e.target===e.currentTarget) closeModal(id); }
@@ -83,151 +107,7 @@ function showAlert(id, t, m){
 }
 
 // ================================================================
-// DIAGNOSTIC V20
-// ================================================================
-function renderDiagnostic(){
-  const el=document.getElementById('page-diagnostic'); if(!el) return;
-
-  let html='<div class="page-title">🔍 Diagnostic V20</div>';
-  html+='<div class="page-sub">Structure des rotations WE, nuits vendredi, et detail des contraintes</div>';
-
-  // -- Section 1 : Rotation WE ce mois --
-  const rotData=loadRotationWE();
-  const moisActuel=currentMonth;
-  const rotMois=rotData[moisActuel];
-
-  if(rotMois&&rotMois.weAttribues&&Object.keys(rotMois.weAttribues).length){
-    html+=`<div class="card" style="margin-bottom:14px">
-      <div class="card-hd">
-        <div class="card-title">📅 Rotation WE -- ${monthLabel(moisActuel)}</div>
-        <span class="badge b-blue">Equipes tournantes V20</span>
-      </div>
-      <div style="font-size:.78rem;color:var(--ink3);margin-bottom:12px">
-        Les blocs WE ont ete composes avant generation. Sam+Dim = bloc atomique inseparable.
-      </div>`;
-
-    Object.entries(rotMois.weAttribues).sort(([a],[b])=>+a-+b).forEach(([wn,slots])=>{
-      html+=`<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px">
-        <div style="font-weight:700;font-size:.85rem;margin-bottom:8px">Weekend ${wn}</div>
-        <div style="display:flex;flex-wrap:wrap;gap:8px">`;
-      Object.entries(slots).forEach(([pid,ids])=>{
-        const p=plages.find(x=>x.id===+pid); if(!p) return;
-        html+=`<div style="flex:1;min-width:160px;background:${p.color}18;border:1px solid ${p.color}44;border-radius:6px;padding:8px">
-          <div style="font-size:.72rem;font-weight:700;color:${p.color};margin-bottom:4px">${p.nom}</div>
-          <div style="display:flex;flex-wrap:wrap;gap:4px">`;
-        ids.forEach(id=>{
-          const e=educs.find(x=>x.id===+id);
-          if(!e) return;
-          html+=`<span style="background:${e.color};color:#fff;border-radius:4px;padding:2px 7px;font-size:.72rem;font-weight:600">${e.prenom}</span>`;
-        });
-        if(!ids.length) html+=`<span style="color:var(--red);font-size:.72rem">⚠ Poste libre</span>`;
-        html+=`</div></div>`;
-      });
-      html+=`</div></div>`;
-    });
-
-    // Equipe du dernier WE (continuite mois suivant)
-    if(rotMois.derniereEquipe&&rotMois.derniereEquipe.length){
-      html+=`<div class="alert a-info" style="margin-top:8px;font-size:.77rem">
-        <strong>Continuite mois suivant :</strong> Ces educateurs seront en repos sur le 1er WE du mois prochain :
-        ${rotMois.derniereEquipe.map(id=>{const e=educs.find(x=>x.id===+id);return e?`<strong>${e.prenom}</strong>`:''}).filter(Boolean).join(', ')}
-      </div>`;
-    }
-    html+=`</div>`;
-  }
-
-  // -- Section 2 : Pression trimestrielle --
-  const soldeTrimPrec=getSoldeTrimPrecedent(currentMonth);
-  const estCloture=estMoisClotureTrimestre(currentMonth);
-  const estDec=estMoisDecembre(currentMonth);
-  const nTrim=numTrimestre(currentMonth);
-
-  if(Object.keys(soldeTrimPrec).length||estCloture){
-    html+=`<div class="card" style="margin-bottom:14px">
-      <div class="card-hd">
-        <div class="card-title">📊 Pression trimestrielle -- T${nTrim}</div>
-        ${estCloture?'<span class="badge b-orange">⚠ Mois de cloture</span>':
-          estDec?'<span class="badge b-red">🎯 Decembre -- Remise a zero</span>':
-          '<span class="badge b-green">En cours</span>'}
-      </div>`;
-
-    if(estCloture){
-      html+=`<div class="alert a-warn" style="margin-bottom:10px;font-size:.78rem">
-        Ce mois est un mois de cloture trimestrielle. L'objectif est que chaque educateur termine entre <strong>-6h et +6h</strong> du solde trimestriel.
-        La pression de generation est renforcee pour atteindre cet objectif.
-      </div>`;
-    }
-
-    if(Object.keys(soldeTrimPrec).length){
-      html+=`<div style="font-size:.78rem;color:var(--ink3);margin-bottom:8px">Soldes cumules du trimestre precedent :</div>
-      <div style="display:flex;flex-wrap:wrap;gap:8px">`;
-      educs.forEach(e=>{
-        const s=soldeTrimPrec[e.id];
-        if(s===undefined) return;
-        const ok=Math.abs(s)<=6;
-        html+=`<div style="background:var(--surface2);border:1.5px solid ${ok?'var(--green)':Math.abs(s)<=15?'var(--orange)':'var(--red)'};border-radius:8px;padding:8px 12px;text-align:center;min-width:100px">
-          <div style="font-size:.72rem;font-weight:600">${e.prenom}</div>
-          <div style="font-family:'Syne',sans-serif;font-weight:800;font-size:1rem;color:${ok?'var(--green)':Math.abs(s)<=15?'var(--orange)':'var(--red)'}">${s>=0?'+':''}${s.toFixed(1)}h</div>
-          <div style="font-size:.65rem;color:var(--ink3)">${ok?'✅ OK':Math.abs(s)<=15?'⚠ A corriger':'❌ Critique'}</div>
-        </div>`;
-      });
-      html+=`</div>`;
-    }
-    html+=`</div>`;
-  }
-
-  // -- Section 3 : Trajectoire annuelle --
-  // (affichee uniquement si un horaire a ete genere ce mois)
-  if(horaire[currentMonth]&&Object.keys(horaire[currentMonth]).length){
-    html+=`<div class="card" style="margin-bottom:14px">
-      <div class="card-title" style="margin-bottom:12px">🎯 Trajectoire annuelle</div>
-      <div style="display:flex;flex-wrap:wrap;gap:8px">`;
-    const traj=calculerTrajectoireAnnuelle(currentMonth);
-    educs.forEach(e=>{
-      const t=traj[e.id]; if(!t) return;
-      const zoneColor={normale:'var(--green)',attention:'var(--orange)',critique:'var(--orange)',danger:'var(--red)',surplus:'var(--blue)',ok_positif:'var(--green)'}[t.zone]||'var(--ink3)';
-      html+=`<div style="background:var(--surface2);border:1.5px solid ${zoneColor};border-radius:8px;padding:8px 12px;min-width:130px">
-        <div style="font-size:.72rem;font-weight:600">${e.prenom} ${e.nom}</div>
-        <div style="font-size:.65rem;color:var(--ink3)">${e.contrat}</div>
-        <div style="font-family:'Syne',sans-serif;font-weight:800;font-size:.95rem;color:${zoneColor};margin-top:4px">${t.soldeAnnuel>=0?'+':''}${t.soldeAnnuel.toFixed(1)}h</div>
-        <div style="font-size:.65rem;font-weight:700;color:${zoneColor};text-transform:uppercase;letter-spacing:.5px">${t.zone}</div>
-        ${t.irrecuperable?'<div style="font-size:.62rem;color:var(--red);margin-top:2px">⚠ Irrecuperable</div>':''}
-      </div>`;
-    });
-    html+=`</div></div>`;
-  }
-
-  // -- Section 4 : Detail contraintes generation --
-  const diag=window._lastDiagnostic||[];
-  if(diag.length){
-    html+=`<div class="card">
-      <div class="card-title" style="margin-bottom:12px">🔍 Detail contraintes -- derniere generation</div>`;
-    diag.forEach(function(d){
-      html+=`<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px;margin-bottom:8px">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-          <div style="font-weight:700;font-size:.82rem">${d.ds} -- ${d.plage}</div>
-          <span class="badge ${d.couverte?'b-green':'b-red'}">${d.couverte?'✅ Couverte':'⚠ Non couverte'}</span>
-        </div>
-        <div style="font-size:.76rem">`;
-      d.details.forEach(function(r){
-        html+=`<div style="display:flex;align-items:center;gap:8px;padding:3px 0;border-bottom:1px solid var(--border)">
-          <div class="avatar" style="background:${r.color};width:24px;height:24px;font-size:.6rem;flex-shrink:0">${r.ini}</div>
-          <span style="font-weight:600;min-width:110px;font-size:.78rem">${r.nom}</span>
-          <span style="color:${r.ok?'var(--green)':'var(--red)'};font-size:.76rem">${r.ok?'✅ Assigne':'❌ '+r.raison}</span>
-        </div>`;
-      });
-      html+=`</div></div>`;
-    });
-    html+=`</div>`;
-  } else if(!horaire[currentMonth]){
-    html+=`<div class="empty"><div class="icon">🔍</div><p>Generez un horaire pour voir le diagnostic complet.</p></div>`;
-  }
-
-  el.innerHTML=html;
-}
-
-// ================================================================
-// EDUCATEURS
+// ÉDUCATEURS
 // ================================================================
 function renderDemandesForm(demandes){
   demandes = demandes || [];
@@ -236,9 +116,11 @@ function renderDemandesForm(demandes){
     const jourSel   = document.getElementById(`me-dem-jour-${i}`);
     const typeSel   = document.getElementById(`me-dem-type-${i}`);
     const plagesGrp = document.getElementById(`me-dem-plages-${i}`);
+    // Si les éléments n'existent pas encore dans le DOM, on ignore
     if(!jourSel || !typeSel || !plagesGrp) return;
     jourSel.value = (dem.jour !== undefined && dem.jour !== null) ? dem.jour : -1;
     typeSel.value = dem.type || 'eviter';
+    // Plages sous forme de checkboxes
     plagesGrp.innerHTML = plages.map(p=>{
       const checked = (dem.plageIds||[]).includes(p.id);
       return `<label class="chk-pill ${checked?'on':''}" onclick="togglePill(this)">
@@ -251,7 +133,7 @@ function renderDemandesForm(demandes){
 function resetEducForm(){
   var g=function(id){return document.getElementById(id);};
   if(g('me-id'))      g('me-id').value='';
-  if(g('me-title'))   g('me-title').textContent='Nouvel educateur';
+  if(g('me-title'))   g('me-title').textContent='Nouvel éducateur';
   ['me-prenom','me-nom','me-notes'].forEach(function(id){var el=g(id);if(el)el.value='';});
   if(g('me-contrat')) g('me-contrat').value='temps-plein';
   if(g('me-heures'))  g('me-heures').value='';
@@ -263,6 +145,7 @@ function resetEducForm(){
     p.classList.toggle('on', cb.checked);
   });
   renderPlageCheckboxes([],[]);
+  // renderDemandesForm appelé après que la modal est visible
   setTimeout(()=>renderDemandesForm([]), 10);
 }
 
@@ -270,7 +153,7 @@ function renderPlageCheckboxes(prefs, excls){
   const pEl = document.getElementById('me-prefs');
   const eEl = document.getElementById('me-excls');
   if(!plages.length){
-    pEl.innerHTML = '<span style="font-size:.78rem;color:var(--ink3)">Definissez d\'abord des plages.</span>';
+    pEl.innerHTML = '<span style="font-size:.78rem;color:var(--ink3)">Définissez d\'abord des plages.</span>';
     eEl.innerHTML = '';
     return;
   }
@@ -309,7 +192,7 @@ function openEditEduc(id){
 function saveEduc(){
   const prenom = document.getElementById('me-prenom').value.trim();
   const nom    = document.getElementById('me-nom').value.trim();
-  if(!prenom||!nom){ alert('Prenom et nom requis.'); return; }
+  if(!prenom||!nom){ alert('Prénom et nom requis.'); return; }
   const jours      = [...document.querySelectorAll('#me-jours-grp input:checked')].map(c=>+c.value);
   const prefs      = [...document.querySelectorAll('.ep:checked')].map(c=>+c.value);
   const excls      = [...document.querySelectorAll('.ee:checked')].map(c=>+c.value);
@@ -321,6 +204,7 @@ function saveEduc(){
   const notes       = g2('me-notes')   ? g2('me-notes').value.trim() : '';
   const editId      = g2('me-id')      ? (+g2('me-id').value || null) : null;
 
+  // Lire les demandes structurées (max 2) - un jour + plusieurs plages
   const demandes = [];
   [1,2].forEach(function(i){
     var jourEl = document.getElementById('me-dem-jour-'+i);
@@ -344,7 +228,7 @@ function saveEduc(){
 }
 
 function delEduc(id){
-  if(!confirm('Supprimer cet educateur ?')) return;
+  if(!confirm('Supprimer cet éducateur ?')) return;
   educs = educs.filter(e=>e.id!==id);
   save(); renderAll();
 }
@@ -353,7 +237,7 @@ function renderEducGrid(){
   const g = document.getElementById('educ-grid');
   document.getElementById('nb-educ').textContent = educs.length;
   if(!educs.length){
-    g.innerHTML = '<div class="empty"><div class="icon">👤</div><p>Aucun educateur.<br>Cliquez sur "+ Nouvel educateur".</p></div>';
+    g.innerHTML = '<div class="empty"><div class="icon">👤</div><p>Aucun éducateur.<br>Cliquez sur "+ Nouvel éducateur".</p></div>';
     return;
   }
   g.innerHTML = educs.map(e=>{
@@ -392,12 +276,12 @@ function renderEducGrid(){
 // ================================================================
 function addPlage(){
   const nom = document.getElementById('p-nom').value.trim();
-  if(!nom){ alert('Donnez un nom a la plage.'); return; }
+  if(!nom){ alert('Donnez un nom à la plage.'); return; }
   const debut = document.getElementById('p-debut').value;
   const fin   = document.getElementById('p-fin').value;
   if(!debut||!fin){ alert('Heures requises.'); return; }
   const jours = [...document.querySelectorAll('#p-jours-grp input:checked')].map(c=>+c.value);
-  if(!jours.length){ alert('Selectionnez au moins un jour.'); return; }
+  if(!jours.length){ alert('Sélectionnez au moins un jour.'); return; }
   const min   = +document.getElementById('p-min').value || 1;
   const max   = +document.getElementById('p-max').value || min;
   const tous  = document.getElementById('p-tous').checked;
@@ -427,19 +311,11 @@ function renderPlageList(){
   if(!plages.length){ el.innerHTML='<div class="empty"><div class="icon">🕐</div><p>Aucune plage.</p></div>'; return; }
   el.innerHTML = plages.map(p=>{
     const jours = p.jours.map(j=>JOURS[j]).join(', ');
-    // Detection automatique nuit vendredi
-    const isNuitVen = (p.type==='nuit'||p.debut>='22:00'||(p.fin<='07:00'&&p.fin>'00:00'))
-      && !(p.type==='reunion'||(p.nom||'').toLowerCase().includes('reunion'))
-      && (p.jours||[]).includes(4); // index 4 = vendredi dans notre convention
     return `<div class="plage-row">
       <div class="plage-dot" style="background:${p.color}"></div>
       <div class="plage-info">
-        <div class="plage-name">
-          ${p.nom}
-          ${p.tous?'<span class="badge b-orange" style="font-size:.65rem">Tous requis</span>':''}
-          ${isNuitVen?'<span class="badge b-purple" style="font-size:.65rem">🌙 Nuit Ven. -- rotation propre</span>':''}
-        </div>
-        <div class="plage-detail">${p.debut} -> ${p.fin} - ${p.dureeH.toFixed(1)}h - min ${p.min} educ - ${jours}</div>
+        <div class="plage-name">${p.nom} ${p.tous?'<span class="badge b-orange">Tous requis</span>':''}</div>
+        <div class="plage-detail">${p.debut} → ${p.fin} - ${p.dureeH.toFixed(1)}h - min ${p.min} éduc - ${jours}</div>
       </div>
       <button class="btn btn-red btn-sm" onclick="delPlage(${p.id})">Suppr.</button>
     </div>`;
@@ -447,7 +323,7 @@ function renderPlageList(){
 }
 
 // ================================================================
-// REGLES
+// RÈGLES
 // ================================================================
 function renderRules(){
   renderRuleList('rules-legal',  reglesL, 'legal');
@@ -457,7 +333,7 @@ function renderRules(){
 function renderRuleList(elId, arr, cat){
   const el = document.getElementById(elId);
   if(!arr.length && cat==='custom'){
-    el.innerHTML='<div class="empty"><div class="icon">✏️</div><p>Aucune regle personnalisee.</p></div>';
+    el.innerHTML='<div class="empty"><div class="icon">✏️</div><p>Aucune règle personnalisée.</p></div>';
     return;
   }
   el.innerHTML = arr.map(r=>`<div class="rule-row">
@@ -495,8 +371,8 @@ function addAbsence(){
   const fin    = document.getElementById('abs-fin').value;
   const type   = document.getElementById('abs-type').value;
   const note   = document.getElementById('abs-note').value.trim();
-  if(!educId||!debut||!fin){ alert('Completez tous les champs.'); return; }
-  if(debut>fin){ alert('La date de debut doit etre avant la fin.'); return; }
+  if(!educId||!debut||!fin){ alert('Complétez tous les champs.'); return; }
+  if(debut>fin){ alert('La date de début doit être avant la fin.'); return; }
   absences.push({id:Date.now(), educId, debut, fin, type, note});
   save(); renderAbsList();
 }
@@ -511,7 +387,7 @@ function renderAbsList(){
       <span style="font-size:1.1rem">${icons[a.type]||'📌'}</span>
       <div class="plage-info">
         <div class="plage-name">${e?e.prenom+' '+e.nom:'Inconnu'} - ${a.type}</div>
-        <div class="plage-detail">${a.debut} -> ${a.fin}${a.note?' - '+a.note:''}</div>
+        <div class="plage-detail">${a.debut} → ${a.fin}${a.note?' - '+a.note:''}</div>
       </div>
       <button class="btn btn-red btn-sm" onclick="delAbsence(${a.id})">Suppr.</button>
     </div>`;
@@ -519,7 +395,7 @@ function renderAbsList(){
 }
 
 // ================================================================
-// JOURS FERIES
+// JOURS FÉRIÉS
 // ================================================================
 function feriesBelges(yr){
   const a=yr%19,b=Math.floor(yr/100),c=yr%100;
@@ -534,17 +410,18 @@ function feriesBelges(yr){
   const fmt=d=>`${yr}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   return[
     {date:`${yr}-01-01`,nom:"Jour de l'an"},
-    {date:fmt(add(paques,1)),nom:"Lundi de Paques"},
-    {date:`${yr}-05-01`,nom:"Fete du Travail"},
+    {date:fmt(add(paques,1)),nom:"Lundi de Pâques"},
+    {date:`${yr}-05-01`,nom:"Fête du Travail"},
     {date:fmt(add(paques,39)),nom:"Ascension"},
-    {date:fmt(add(paques,50)),nom:"Lundi de Pentecote"},
-    {date:`${yr}-07-21`,nom:"Fete Nationale"},
+    {date:fmt(add(paques,50)),nom:"Lundi de Pentecôte"},
+    {date:`${yr}-07-21`,nom:"Fête Nationale"},
     {date:`${yr}-08-15`,nom:"Assomption"},
     {date:`${yr}-11-01`,nom:"Toussaint"},
     {date:`${yr}-11-11`,nom:"Armistice"},
-    {date:`${yr}-12-25`,nom:"Noel"},
+    {date:`${yr}-12-25`,nom:"Noël"},
   ];
 }
+
 function renderFeries(){
   const yr = +document.getElementById('ferie-yr').value || new Date().getFullYear();
   const belges = feriesBelges(yr);
@@ -560,7 +437,7 @@ function renderFeries(){
   }).join('');
   const customs = joursFeries.filter(f=>!belges.find(b=>b.date===f.date));
   if(customs.length){
-    el.innerHTML += `<div style="margin-top:12px;font-size:.72rem;font-weight:700;color:var(--ink3);text-transform:uppercase;letter-spacing:1px">Personnalises</div>`;
+    el.innerHTML += `<div style="margin-top:12px;font-size:.72rem;font-weight:700;color:var(--ink3);text-transform:uppercase;letter-spacing:1px">Personnalisés</div>`;
     el.innerHTML += customs.map(f=>`<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)">
       <span style="font-size:.85rem;flex:1"><strong>${f.date}</strong> - ${f.nom}</span>
       <button class="btn btn-red btn-sm" onclick="delFerie('${f.date}')">Suppr.</button>
@@ -575,7 +452,7 @@ function toggleFerie(date,nom,active){
 }
 function addFerie(){
   const date = document.getElementById('ferie-date').value;
-  const nom  = document.getElementById('ferie-nom').value.trim() || 'Ferie';
+  const nom  = document.getElementById('ferie-nom').value.trim() || 'Férié';
   if(!date) return;
   if(!joursFeries.find(f=>f.date===date)) joursFeries.push({date,nom,active:true});
   save(); renderFeries();
