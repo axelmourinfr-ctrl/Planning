@@ -232,7 +232,7 @@ function calculerQuotasStructurels(hist, jours, moisStr, traj, besoins){
     // Evite que les mi-temps (avec tous les jours coches) soient surcharges
     const hSemContrat=getTargetH(e);
     const nbSemMois=4.33;
-    const plafondContractuel=hSemContrat*nbSemMois*1.05; // 5% de marge
+    const plafondContractuel=hSemContrat*nbSemMois*1.20; // 20% de marge
     const baseMois=Math.min(joursEffectifs*7.6*re, plafondContractuel);
 
     // Ajustement trajectoire annuelle
@@ -671,24 +671,28 @@ function bonusStabilite(e,dow,plage,patterns,isWE){
   const pat=patterns[String(e.id)];
   if(!pat||!pat[dow]||!pat[dow][plage.id]) return 0;
   const cnt=pat[dow][plage.id]||0;
+  // Usure progressive pour eviter la rigidite permanente
   let usure=1.0;
-  if(cnt>12) usure=0.65;
-  else if(cnt>8) usure=0.80;
-  else if(cnt>5) usure=0.90;
-  const mult=(isWE?0.5:1.0)*usure;
-  if(cnt>=8) return -15*mult;
-  if(cnt>=6) return -11*mult;
-  if(cnt>=4) return -8*mult;
-  if(cnt>=2) return -5*mult;
-  return -2*mult;
+  if(cnt>12) usure=0.70;
+  else if(cnt>8) usure=0.85;
+  else if(cnt>5) usure=0.92;
+  // Poids fort pour stabilite (V20 : patterns humains importants)
+  // WE : poids reduit car gere par rotation tournante
+  const mult=(isWE?0.4:1.0)*usure;
+  if(cnt>=8) return -25*mult;
+  if(cnt>=6) return -20*mult;
+  if(cnt>=4) return -15*mult;
+  if(cnt>=2) return -10*mult;
+  return -5*mult;
 }
 
 function scoreCyclePersonnel(e,dow,patterns){
   const pat=patterns[String(e.id)]; if(!pat||!pat[dow]) return 0;
   const totalJour=Object.values(pat[dow]).reduce((s,v)=>s+v,0);
-  if(totalJour>=6) return -4;
-  if(totalJour>=4) return -2;
-  if(totalJour>=2) return -1;
+  // Poids augmente : favoriser les jours habituels de l'educ
+  if(totalJour>=6) return -12;
+  if(totalJour>=4) return -8;
+  if(totalJour>=2) return -4;
   return 0;
 }
 
@@ -738,11 +742,14 @@ function checkLoi(e,d,ds,dow,plage,tracker,lastPrest,minRepos,maxCons,reposNuit,
       const finMs=new Date(la.date+'T00:00').getTime()+(la.pm?86400000:0)+(lh*60+lm)*60000;
       const debMs=new Date(ds+'T00:00').getTime()+(bh*60+bm)*60000;
       const dh=(debMs-finMs)/3600000;
-      if(dh>=0&&dh<minRepos) return{ok:false,raison:`Repos 11h (${dh.toFixed(1)}h)`};
+      // Si dh <= 0 : la plage commence avant ou au moment de la fin precedente
+      // C'est une continuation directe (ex: aprem 13:30-20:00 puis nuit 20:00)
+      // On ne bloque que si il y a un vrai ecart positif insuffisant
+      if(dh>0 && dh<minRepos) return{ok:false,raison:'Repos 11h ('+dh.toFixed(1)+'h)'};
     }
     if(la&&la.isNuit&&reposNuit>0&&Math.round((d-new Date(la.date))/86400000)<=reposNuit)
       return{ok:false,raison:'Repos apres nuit'};
-    const maxHJ=isNuitP(plage)?14:11;
+    const maxHJ=isNuitP(plage)?24:11;
     const hJour=plages.filter(p2=>!isReunion(p2)).reduce((s,pp)=>{
       const ids=(planning[ds]||{})[pp.id];
       return Array.isArray(ids)&&ids.map(x=>+x).includes(e.id)?s+dureeH(pp):s;
@@ -750,11 +757,6 @@ function checkLoi(e,d,ds,dow,plage,tracker,lastPrest,minRepos,maxCons,reposNuit,
     if(hJour+dureeH(plage)>maxHJ) return{ok:false,raison:'Max h/jour'};
   }
   if(hSem(tracker[e.id],ds)+dureeH(plage)>50) return{ok:false,raison:'Max 50h/sem'};
-  // Plafond contractuel hebdomadaire : ne pas depasser 130% des heures du contrat
-  // Evite qu'un mi-temps (19h/sem) accumule 40h en une semaine
-  const hSemContratMax=getTargetH(e)*1.3;
-  if(hSem(tracker[e.id],ds)+dureeH(plage)>hSemContratMax && !isReunion(plage))
-    return{ok:false,raison:'Plafond contractuel semaine'};
   return{ok:true,raison:''};
 }
 
@@ -774,16 +776,10 @@ function checkConvention(e,d,ds,plage,niveau,tracker,hist,quotas,traj,maxWeMois)
     const soldeCourant=(hist[e.id].solde||0)+(tracker[e.id].h-(quotas[e.id]?.h.cible||0));
     const hCibleE=quotas[e.id]?.h.cible||0;
     // Toujours bloquer si on depasse la cible de plus de 8h (sauf zone danger)
-    if(tr&&(tr.zone==='danger'||tr.zone==='critique')){
-      // Zone urgence : autoriser jusqu'a +15h
-      if(soldeCourant>15) return{ok:false,raison:'Solde +'+soldeCourant.toFixed(1)+'h',dur:false};
-    } else {
-      // Zone normale : bloquer strictement a +8h
-      if(soldeCourant>8) return{ok:false,raison:'Solde +'+soldeCourant.toFixed(1)+'h',dur:false};
-    }
-    // Bloquer aussi si l'educ a deja fait 110% de sa cible mensuelle
-    if(hCibleE>0 && tracker[e.id].h > hCibleE*1.10)
-      return{ok:false,raison:'Cible mensuelle depassee',dur:false};
+    // Bloquer si solde trop positif (educ a deja trop d'heures)
+    // Seuil assoupli pour ne pas laisser des postes vides
+    const seuilBlocage = (tr&&(tr.zone==='danger'||tr.zone==='critique')) ? 18 : 12;
+    if(soldeCourant>seuilBlocage) return{ok:false,raison:'Solde +'+soldeCourant.toFixed(1)+'h',dur:false};
 
     // Verification quota plage structurel (V20 : strict)
     const myCP=(tracker[e.id].plageCount[plage.id]||0);
@@ -903,14 +899,16 @@ function score(e,d,ds,plage,weOrFerie,dow,isWEContext,tracker,hist,quotas,traj,p
     }
   });
 
-  if(!reunion&&!e.acceptePause){
+  if(!reunion&&!e.acceptePause&&!nuit){
+    // Penalite si l'educ a deja une plage terrain ce jour (evite les horaires a pause)
+    // Reduit pour ne pas bloquer les vendredis charges (matin + aprem institutionnel)
     const dejaTerrain=Object.keys(planning_ref[ds]||{}).some(pid=>{
       if(pid.startsWith('_')) return false;
       const p2=plageById(+pid);
-      if(!p2||isReunion(p2)) return false;
+      if(!p2||isReunion(p2)||isNuitP(p2)) return false;
       return(planning_ref[ds][pid]||[]).map(x=>+x).includes(e.id);
     });
-    if(dejaTerrain) sc+=28;
+    if(dejaTerrain) sc+=15;
   }
 
   return sc;
@@ -936,7 +934,11 @@ function updateTracker(e,d,ds,plage,nuit,we,tracker,lastPrest){
     const pw=POIDS[tp]||1;
     t.fatigue+=pw*(h>10?2:h>8?1.5:h>6?0.8:0.3)+(t.cons>4?1.2:0);
     t.fatigue=Math.min(18,t.fatigue*0.94);
-    lastPrest[e.id]={date:ds,fin:plage.fin,isNuit:nuit,pm:plage.fin<plage.debut};
+    // Ne pas mettre a jour lastPrest pour les reunions
+    // (une reunion ne genere pas de contrainte de repos de 11h)
+    if(!isReunion(plage)){
+      lastPrest[e.id]={date:ds,fin:plage.fin,isNuit:nuit,pm:plage.fin<plage.debut};
+    }
   }
   t.plageCount[plage.id]=(t.plageCount[plage.id]||0)+1;
   t.types[tp]=(t.types[tp]||0)+1;
