@@ -1,5 +1,5 @@
 // ============================================================
-// algo.js - PlanEduc Pro - Moteur v17
+// algo.js - PlanEduc Pro - Moteur v19
 // ============================================================
 // DEUX CORRECTIONS STRUCTURELLES :
 //  1. WE comme blocs atomiques (généré AVANT le reste)
@@ -92,20 +92,25 @@ function calculerTrajectoireAnnuelle(moisStr){
     });
     // Heures restantes à produire
     const hRestantes=objectifAnnuel-hFaites;
-    // Capacité théorique restante (mois restants × cible mensuelle)
-    const cibleMensuelle=joursOuvMois(yr,mo)*7.6*re; // cible mois actuel
-    const capaciteRestante=moisRestants*cibleMensuelle;
-    // Solde trajectoire : hRestantes - capaciteRestante
-    const soldeAnnuel=hFaites-(objectifAnnuel*(mo-1)/12); // avance/retard sur la trajectoire
+    // Capacité réaliste restante
+    const cibleMois=joursOuvMois(yr,mo)*7.6*re;
+    const capaciteRestante=moisRestants*cibleMois;
+    // Solde : h faites vs attendu à ce stade
+    const hAttenduAStade=objectifAnnuel*((mo-1)/12);
+    const soldeAnnuel=hFaites-hAttenduAStade;
+    // Irrécupérable si même en travaillant max, ne peut pas atteindre 95%
+    const margeMax=capaciteRestante+hFaites;
+    const irrecuperable=margeMax<(objectifAnnuel*0.95);
     // Zone urgence
-    // Zones urgence plafonnées : max 2.2 pour éviter comportements extrêmes
+    // Zones urgence + détection irrécupérable
     let zone='normale', urgenceMult=1.0;
-    if(soldeAnnuel<-50){zone='danger';urgenceMult=2.2;}    // plafonné (était 4.0)
-    else if(soldeAnnuel<-30){zone='critique';urgenceMult=1.8;} // plafonné (était 3.0)
+    if(irrecuperable){zone='danger';urgenceMult=2.5;}      // mathématiquement critique
+    else if(soldeAnnuel<-50){zone='danger';urgenceMult=2.2;}
+    else if(soldeAnnuel<-30){zone='critique';urgenceMult=1.8;}
     else if(soldeAnnuel<-15){zone='attention';urgenceMult=1.4;}
     else if(soldeAnnuel>30){zone='surplus';urgenceMult=1.8;}
     else if(soldeAnnuel>15){zone='ok_positif';urgenceMult=1.3;}
-    traj[e.id]={objectifAnnuel,hFaites,hRestantes,soldeAnnuel,zone,urgenceMult,moisRestants};
+    traj[e.id]={objectifAnnuel,hFaites,hRestantes,soldeAnnuel,zone,urgenceMult,moisRestants,irrecuperable};
   });
   return traj;
 }
@@ -157,16 +162,18 @@ function bonusStabilite(e,dow,plage,patterns,isWE){
   // Usure progressive : au-delà de 8 occurrences, le bonus commence à s'éroder doucement
   // pour éviter la rigidité permanente tout en conservant l'habitude
   // L'usure est légère (max -20% du bonus) et non brutale
+  // Usure forte : bonus max -18 pts (était -60 pts) pour ne plus écraser l'équité
   let usure=1.0;
-  if(cnt>12) usure=0.80;       // très ancré mais légère ouverture
-  else if(cnt>8) usure=0.90;   // bien ancré, légère pression diversification
+  if(cnt>12) usure=0.65;
+  else if(cnt>8) usure=0.80;
+  else if(cnt>5) usure=0.90;
 
-  const mult=(isWE?0.7:1.6)*usure;
-  if(cnt>=8) return -38*mult;
-  if(cnt>=6) return -30*mult;
-  if(cnt>=4) return -22*mult;
-  if(cnt>=2) return -13*mult;
-  return -5*mult;
+  const mult=(isWE?0.5:1.0)*usure;
+  if(cnt>=8) return -18*mult;
+  if(cnt>=6) return -14*mult;
+  if(cnt>=4) return -10*mult;
+  if(cnt>=2) return -6*mult;
+  return -3*mult;
 }
 
 // Détection spécialisation excessive : si >75% des prestations d'un type
@@ -178,8 +185,9 @@ function malusSpecialisation(e,tp,tracker_e,hist_e){
   if(total<10) return 0; // pas assez de données
   const myType=(types[tp]||0)+(histTypes[tp]||0);
   const ratio=myType/Math.max(1,total);
-  if(ratio>0.75) return 8;  // très spécialisé → légère pression
-  if(ratio>0.60) return 4;
+  if(ratio>0.75) return 15;  // très spécialisé → pression forte
+  if(ratio>0.60) return 8;
+  if(ratio>0.50) return 3;
   return 0;
 }
 
@@ -190,9 +198,9 @@ function scoreCyclePersonnel(e,dow,patterns){
   // Compter le total de toutes les plages ce jour
   const totalJour=Object.values(pat[dow]).reduce((s,v)=>s+v,0);
   // Si l'educ travaille souvent ce jour → bonus
-  if(totalJour>=6) return -10;
-  if(totalJour>=4) return -6;
-  if(totalJour>=2) return -3;
+  if(totalJour>=6) return -5;   // réduit (était -10)
+  if(totalJour>=4) return -3;
+  if(totalJour>=2) return -1;
   return 0;
 }
 
@@ -535,13 +543,22 @@ async function genMois(moisStr,L){
     if(niveau<2&&!re&&(e.excls||[]).includes(plage.id))return{ok:false,raison:'Plage refusée',dur:true};
     if(!re&&isWEDay(d)&&tracker[e.id].weCount>=maxWeMois&&niveau<1)return{ok:false,raison:'Max WE/mois',dur:false};
     if(!re&&niveau===0){
-      const t=traj[e.id];
-      // Zone critique/danger → ignorer quota heures (rattrapage forcé)
-      if(t&&(t.zone==='danger'||t.zone==='critique')){
-        // En zone urgence : pas de blocage quota, sauf excls
+      const tr2=traj[e.id];
+      // Zone critique/danger → rattrapage forcé, pas de blocage quota heures
+      if(tr2&&(tr2.zone==='danger'||tr2.zone==='critique')){
+        // Pas de blocage solde mensuel (mais excls reste bloquant)
       } else {
         const solde=hist[e.id].solde+(tracker[e.id].h-quotas[e.id].h.cible);
-        if(solde>14)return{ok:false,raison:`Solde +${solde.toFixed(1)}h`,dur:false};
+        if(solde>10)return{ok:false,raison:`Solde +${solde.toFixed(1)}h`,dur:false};
+      }
+      // Plafond dominance : bloquer si l'educ totalise >40% des heures de l'équipe
+      // (empêche les éducateurs porteurs)
+      if(niveau===0){
+        const hEquipe=educs.reduce((s,x)=>s+(tracker[x.id].h||0),0);
+        const partEduc=(tracker[e.id].h||0)/Math.max(1,hEquipe);
+        const ratioAttendu=ratioE(e)/Math.max(0.01,educs.reduce((s,x)=>s+ratioE(x),0));
+        if(partEduc>ratioAttendu*1.5&&hEquipe>10) // 50% au-dessus de sa part proratisée
+          return{ok:false,raison:'Dominance prestations',dur:false};
       }
       const myC=tracker[e.id].plageCount[plage.id]||0;
       const qMax=quotas[e.id]?.plage[plage.id]?.max;
@@ -559,23 +576,31 @@ async function genMois(moisStr,L){
     const reunion=isReunion(plage),nuit=isNuitP(plage);
     let sc=0;
 
-    // P2 : Trajectoire annuelle (quasi-contrainte)
+    // P2 : HEURES = CONTRAINTE STRUCTURELLE DOMINANTE
+    // Le solde mensuel + trajectoire annuelle dominent le score
     const solde=ht.solde+(t.h-q.h.cible);
-    const urgMult=tr.urgenceMult*pression;
-    if(solde>12)       sc+=40*urgMult;
-    else if(solde>8)   sc+=20*urgMult;
-    else if(solde>4)   sc+=8;
-    else if(solde<-12) sc-=40*urgMult;
-    else if(solde<-8)  sc-=20*urgMult;
-    else if(solde<-4)  sc-=8;
-    else sc+=solde*1.5;
+    const urgMult=Math.min(2.2, tr.urgenceMult*pression);
 
-    // Trajectoire annuelle directe
-    if(tr.soldeAnnuel<-50) sc-=50;
-    else if(tr.soldeAnnuel<-30) sc-=30;
-    else if(tr.soldeAnnuel<-15) sc-=15;
-    if(tr.soldeAnnuel>30) sc+=35;
-    else if(tr.soldeAnnuel>15) sc+=15;
+    // Solde mensuel — poids fort et progressif
+    if(solde>14)       sc+=60*urgMult;  // très au-dessus → fortement bloqué
+    else if(solde>10)  sc+=35*urgMult;
+    else if(solde>6)   sc+=15;
+    else if(solde>3)   sc+=6;
+    else if(solde<-14) sc-=60*urgMult; // très en retard → fortement prioritaire
+    else if(solde<-10) sc-=35*urgMult;
+    else if(solde<-6)  sc-=15;
+    else if(solde<-3)  sc-=6;
+    else sc+=solde*2.0;
+
+    // Trajectoire annuelle — poids encore plus fort
+    if(tr.soldeAnnuel<-50)      sc-=80;  // zone danger → priorité absolue
+    else if(tr.soldeAnnuel<-30) sc-=50;  // zone critique
+    else if(tr.soldeAnnuel<-15) sc-=25;  // zone attention
+    else if(tr.soldeAnnuel<-5)  sc-=8;
+    if(tr.soldeAnnuel>50)       sc+=70;
+    else if(tr.soldeAnnuel>30)  sc+=45;
+    else if(tr.soldeAnnuel>15)  sc+=20;
+    else if(tr.soldeAnnuel>5)   sc+=6;
 
     if(!reunion){
       // P4 : Stabilité + Cycle personnel (fort pour semaine normale)
@@ -585,18 +610,26 @@ async function genMois(moisStr,L){
       if(!isWEContext) sc+=malusSpecialisation(e,typePlage(plage),t,ht);
 
       // P5 : Équité prestations
+      // P5 : Équité prestations — poids FORT pour toutes les plages
       const myCP=norm((ht.plageCount[plage.id]||0)+(t.plageCount[plage.id]||0),e);
       const avgCP=moyPond(educs,x=>(hist[x.id].plageCount[plage.id]||0)+(tracker[x.id].plageCount[plage.id]||0));
       const ecP=myCP-avgCP;
-      if(nuit||weOrFerie){sc+=ecP*12;if(ecP<-1.5)sc-=18;if(ecP>1.5)sc+=15;}
-      else{sc+=ecP*4;}
+      // Même poids pour WE et semaine normale — l'équité s'applique partout
+      sc+=ecP*10;
+      if(ecP<-2)  sc-=20;  // gros déficit → très prioritaire
+      else if(ecP<-1) sc-=10;
+      if(ecP>2)   sc+=20;  // gros surplus → fortement défavorisé
+      else if(ecP>1)  sc+=10;
 
       const tp=typePlage(plage);
       const myTP=norm((ht.types[tp]||0)+(t.types[tp]||0),e);
       const avgTP=moyPond(educs,x=>(hist[x.id].types[tp]||0)+(tracker[x.id].types[tp]||0));
       const ecT=myTP-avgTP;
-      if(nuit||weOrFerie){sc+=ecT*10;if(ecT<-1)sc-=12;if(ecT>1)sc+=10;}
-      else{sc+=ecT*3;}
+      sc+=ecT*8;
+      if(ecT<-2)  sc-=16;
+      else if(ecT<-1) sc-=8;
+      if(ecT>2)   sc+=16;
+      else if(ecT>1)  sc+=8;
 
       if(weOrFerie){
         const myWE=norm((ht.we||0)+(t.weCount||0)+(ann.we||0),e);
@@ -697,163 +730,148 @@ async function genMois(moisStr,L){
   // Pour chaque WE du mois, calculer quel "bloc" attribuer à qui
   const weAssigned={}; // { ds: { plageId: [educId,...] } }
 
-  // ── Attribution blocs WE atomiques ──
-  // 1. Construire les blocs disponibles pour chaque WE
-  // 2. Scorer le bloc ENTIER pour chaque educ
-  // 3. Attribuer le bloc complet d'un coup
-  // Les WE coupés ne sont autorisés qu'en cas d'impossibilité légale
+  // ================================================================
+  // BLOCS WE METIERS — ATOMIQUES ET INDIVISIBLES
+  // Principe : on définit des blocs (ensemble de slots liés),
+  // on sélectionne 1 éducateur par bloc, on verrouille totalement.
+  // Aucun fallback, aucune réouverture.
+  // ================================================================
 
   for(const wn of weNums){
     const joursWE=jours.filter(d=>weMap[dayStr(d)]===wn).sort((a,b)=>a-b);
     if(!joursWE.length) continue;
 
-    // Construire la liste de toutes les plages de ce WE (tous jours)
-    const allSlotsWE=[]; // [{d, ds, dow, plage}]
+    // Construire les slots non verrouillés de ce WE
+    const allSlotsWE=[];
     joursWE.forEach(d=>{
       const ds=dayStr(d),dow=dowIdx(d),fe=isFerie(ds);
       const dc=(fe&&!isWEDay(d))?5:dow;
       plages.filter(p=>p.jours.includes(dc)&&!isReunion(p)).forEach(p=>{
-        allSlotsWE.push({d,ds,dow,plage:p});
+        if(lockedSlots[ds]&&lockedSlots[ds][p.id]){
+          if(!weAssigned[ds])weAssigned[ds]={};
+          weAssigned[ds][p.id]=lockedSlots[ds][p.id]; // recopier verrouillés
+        } else {
+          allSlotsWE.push({d,ds,dow,plage:p});
+        }
       });
     });
+    if(!allSlotsWE.length) continue;
 
-    // Slots déjà verrouillés → recopier directement
-    allSlotsWE.forEach(({ds,plage})=>{
-      if(lockedSlots[ds]&&lockedSlots[ds][plage.id]){
-        if(!weAssigned[ds]) weAssigned[ds]={};
-        weAssigned[ds][plage.id]=lockedSlots[ds][plage.id];
-      }
-    });
+    // Regrouper les slots par plage (pour traiter chaque plage comme un bloc)
+    // Un "bloc métier" = même plage sur sam+dim (ex: nuit sam + nuit dim)
+    const plagesWE=[...new Set(allSlotsWE.map(s=>s.plage.id))].map(pid=>plageById(pid));
 
-    // Scorer chaque educ sur le WE COMPLET
-    // Le score intègre : équité WE annuelle, alternance, trajectoire, quota
-    const scoreWE=educs.map(e=>{
-      let sc=0;
-      const ann=annStats[e.id]||{};
-      const t=traj[e.id]||{zone:'normale',urgenceMult:1,soldeAnnuel:0};
+    for(const plage of plagesWE){
+      const slotsBloc=allSlotsWE.filter(s=>s.plage.id===plage.id); // slots sam+dim pour cette plage
+      const reqMin=+plage.min||1;
+      const nuit=isNuitP(plage);
 
-      // Équité WE annuelle proratisée
-      const myWE=norm((hist[e.id].we||0)+(ann.we||0),e);
-      const avgWE=moyPond(educs,x=>(hist[x.id].we||0)+((annStats[x.id]||{}).we||0));
-      sc+=(myWE-avgWE)*13;
+      // Score par educ sur le BLOC ENTIER
+      // L'educ doit être valide sur TOUS les jours du bloc
+      const candidatsBloc=educs.map(e=>{
+        // Vérifier faisabilité sur tous les jours
+        for(const {d,ds,dow} of slotsBloc){
+          if(!checkLoi(e,d,ds,dow,plage).ok) return null;
+          if(!checkConvention(e,d,ds,plage,0).ok) return null;
+        }
+        // Score du bloc entier
+        const ann=annStats[e.id]||{};
+        const tr=traj[e.id]||{zone:'normale',urgenceMult:1,soldeAnnuel:0};
+        const t=tracker[e.id];
+        const ht=hist[e.id];
+        let sc=0;
 
-      // Alternance WE : pénaliser si WE précédent trop proche
-      if(tracker[e.id].dernierWE){
-        const dernD=new Date(tracker[e.id].dernierWE+'T12:00');
-        const diffSem=Math.round((joursWE[0]-dernD)/604800000);
-        if(diffSem<=1) sc+=35;      // WE consécutifs = très pénalisant
-        else if(diffSem===2) sc-=8; // bonne alternance
-        else if(diffSem>=4) sc+=5;  // trop longtemps sans WE → prioritaire
-      }
+        // P2 : Heures — poids dominant
+        const solde=ht.solde+(t.h-(quotas[e.id]?.h.cible||0));
+        const urgM=Math.min(2.2,tr.urgenceMult*pression);
+        if(solde>10)      sc+=55*urgM;
+        else if(solde>6)  sc+=25*urgM;
+        else if(solde>3)  sc+=10;
+        else if(solde<-10)sc-=55*urgM;
+        else if(solde<-6) sc-=25*urgM;
+        else if(solde<-3) sc-=10;
+        else sc+=solde*2.0;
 
-      // Trajectoire annuelle
-      if(t.soldeAnnuel<-30) sc-=22;
-      else if(t.soldeAnnuel<-15) sc-=10;
-      if(t.soldeAnnuel>30) sc+=18;
-      else if(t.soldeAnnuel>15) sc+=8;
+        // Trajectoire annuelle
+        if(tr.soldeAnnuel<-50)      sc-=80;
+        else if(tr.soldeAnnuel<-30) sc-=50;
+        else if(tr.soldeAnnuel<-15) sc-=25;
+        if(tr.soldeAnnuel>30)       sc+=70;
+        else if(tr.soldeAnnuel>15)  sc+=30;
 
-      // Solde mensuel
-      const soldeMois=hist[e.id].solde+(tracker[e.id].h-(quotas[e.id]?.h.cible||0));
-      if(soldeMois<-10) sc-=12;
-      if(soldeMois>10)  sc+=12;
+        // P4 : Équité WE
+        const myWE=norm((ht.we||0)+(t.weCount||0)+(ann.we||0),e);
+        const avgWE=moyPond(educs,x=>(hist[x.id].we||0)+(tracker[x.id].weCount||0)+((annStats[x.id]||{}).we||0));
+        const ecWE=myWE-avgWE;
+        sc+=ecWE*12;if(ecWE<-1)sc-=15;if(ecWE>1)sc+=15;
 
-      // Max WE/mois déjà atteint ou quota indicatif atteint
-      if(tracker[e.id].weCount>=maxWeMois) sc+=50;
-      else if(capaciteMois[e.id]&&tracker[e.id].weCount>=(capaciteMois[e.id].quotaWE)) sc+=15;
+        // Alternance WE
+        if(t.dernierWE){
+          const diffSem=Math.round((slotsBloc[0].d-new Date(t.dernierWE+'T12:00'))/604800000);
+          if(diffSem<=1) sc+=40;
+          else if(diffSem===2) sc-=10;
+        }
 
-      // Stabilité pattern WE (habitude de ce WE)
-      joursWE.forEach(d=>{
-        const dow=dowIdx(d);
-        allSlotsWE.filter(s=>s.dow===dow).forEach(({plage})=>{
-          sc+=bonusStabilite(e,dow,plage,patterns,true)*0.5;
-        });
-      });
+        // Max WE/mois
+        if(t.weCount>=maxWeMois) sc+=60;
 
-      return{e,sc};
-    }).sort((a,b)=>a.sc-b.sc);
+        // Équité plage
+        const myCP=norm((ht.plageCount[plage.id]||0)+(t.plageCount[plage.id]||0),e);
+        const avgCP=moyPond(educs,x=>(hist[x.id].plageCount[plage.id]||0)+(tracker[x.id].plageCount[plage.id]||0));
+        const ecP=myCP-avgCP;
+        sc+=ecP*10;if(ecP<-2)sc-=20;if(ecP>2)sc+=20;
 
-    // ── attribuerBlocWE : attribution atomique du bloc complet ──
-    // On choisit d'abord les éducs qui vont FAIRE ce WE,
-    // puis on les distribue sur les plages — bloc inséparable.
+        // Nuits
+        if(nuit){
+          const myN=norm((ht.nuits||0)+(t.nuits||0)+(ann.nuits||0),e);
+          const avgN=moyPond(educs,x=>(hist[x.id].nuits||0)+(tracker[x.id].nuits||0)+((annStats[x.id]||{}).nuits||0));
+          const ecN=myN-avgN;
+          sc+=ecN*14;if(ecN<-1.5)sc-=20;if(ecN>1.5)sc+=20;
+        }
 
-    // Etape A : déterminer combien d'éducs distincts sont nécessaires ce WE
-    const maxParPlage=Math.max(...allSlotsWE.filter(s=>!(lockedSlots[s.ds]&&lockedSlots[s.ds][s.plage.id])).map(s=>+s.plage.min||1),0);
-    // Simplification : on cible maxParPlage éducs pour le bloc
-    const nbEducsWE=Math.max(1,maxParPlage);
+        // Stabilité (poids réduit)
+        slotsBloc.forEach(({dow:dw})=>sc+=bonusStabilite(e,dw,plage,patterns,true));
 
-    // Etape B : choisir le groupe optimal (top nbEducsWE selon scoreWE)
-    // Vérifier que le groupe peut légalement couvrir toutes les plages du bloc
-    function groupePeutCouvrir(groupe){
-      for(const {d,ds,dow,plage} of allSlotsWE){
-        if(lockedSlots[ds]&&lockedSlots[ds][plage.id]) continue;
-        const reqMin=+plage.min||1;
-        const valides=groupe.filter(e=>checkLoi(e,d,ds,dow,plage).ok);
-        if(valides.length<reqMin) return false;
-      }
-      return true;
-    }
+        return{e,sc};
+      }).filter(Boolean).sort((a,b)=>a.sc-b.sc);
 
-    // Chercher le meilleur groupe valide
-    let groupeChoisi=[];
-    const candidatsPossibles=scoreWE.filter(({e})=>{
-      // Au moins légalement capable de travailler un jour de ce WE
-      return allSlotsWE.some(({d,ds,dow,plage})=>checkLoi(e,d,ds,dow,plage).ok);
-    });
-    // Essayer avec les top nbEducsWE d'abord
-    const topCands=candidatsPossibles.slice(0,Math.min(nbEducsWE*2,candidatsPossibles.length)).map(x=>x.e);
-    if(groupePeutCouvrir(topCands.slice(0,nbEducsWE))){
-      groupeChoisi=topCands.slice(0,nbEducsWE);
-    } else {
-      // Fallback : utiliser tous les candidats disponibles
-      groupeChoisi=topCands;
-    }
+      // Attribuer reqMin éducs au bloc — PAS DE FALLBACK
+      const assigned=candidatsBloc.slice(0,reqMin).map(x=>x.e);
 
-    // Etape C : distribuer le bloc sur les plages avec le groupe choisi
-    const dejaDansWE=new Set(groupeChoisi.map(e=>e.id));
-    const slotsTries=[...allSlotsWE].sort((a,b)=>{
-      const na=isNuitP(a.plage)?0:1,nb=isNuitP(b.plage)?0:1; return na-nb;
-    });
-
-    for(const {d,ds,dow,plage} of slotsTries){
-      if(lockedSlots[ds]&&lockedSlots[ds][plage.id]) continue;
-      if(!weAssigned[ds]) weAssigned[ds]={};
-      const reqMin=+plage.min||1, nuit=isNuitP(plage);
-
-      // Prioriser les membres du groupe choisi, puis élargir si besoin
-      let cands=groupeChoisi.filter(e=>checkLoi(e,d,ds,dow,plage).ok&&checkConvention(e,d,ds,plage,0).ok);
-      if(cands.length<reqMin){
-        // Elargir au-delà du groupe (cas exceptionnel)
-        const extra=scoreWE.filter(({e})=>!dejaDansWE.has(e.id)&&checkLoi(e,d,ds,dow,plage).ok&&checkConvention(e,d,ds,plage,1).ok).map(x=>x.e);
-        cands=[...cands,...extra];
-        extra.forEach(e=>dejaDansWE.add(e.id)); // les ajouter au bloc
-      }
-      if(cands.length<reqMin){
-        const urgence=scoreWE.filter(({e})=>checkLoi(e,d,ds,dow,plage).ok).map(x=>x.e);
-        cands=[...new Set([...cands,...urgence])];
+      if(assigned.length<reqMin){
+        // Tentative niveau 2 : relâcher convention (WE max/mois)
+        const cands2=educs.map(e=>{
+          for(const {d,ds,dow} of slotsBloc){
+            if(!checkLoi(e,d,ds,dow,plage).ok) return null;
+            if(!checkConvention(e,d,ds,plage,1).ok) return null;
+          }
+          return{e,sc:tracker[e.id].weCount*10+(hist[e.id].we||0)};
+        }).filter(Boolean).sort((a,b)=>a.sc-b.sc);
+        assigned.push(...cands2.slice(0,reqMin-assigned.length).map(x=>x.e));
       }
 
-      const assigned=cands.slice(0,reqMin);
-      weAssigned[ds][plage.id]=assigned.map(e=>e.id);
-      assigned.forEach(e=>updateTracker(e,d,ds,plage,nuit,true));
       if(assigned.length<reqMin)
-        warnings.push(`${ds} - ${plage.nom}: ${reqMin-assigned.length} poste(s) non couvert(s) (WE bloc)`);
+        warnings.push(`WE ${wn} - ${plage.nom}: bloc incomplet ${assigned.length}/${reqMin} (contrainte légale)`);
+
+      // Attribuer le bloc sur TOUS les jours — VERROUILLÉ
+      slotsBloc.forEach(({d,ds,dow})=>{
+        if(!weAssigned[ds])weAssigned[ds]={};
+        weAssigned[ds][plage.id]=assigned.map(e=>e.id);
+        assigned.forEach(e=>updateTracker(e,d,ds,plage,nuit,true));
+      });
     }
 
-    // Vérification : si un educ est seulement sam ou seulement dim → WE coupé
-    // Logger mais ne pas casser (cas exceptionnels légaux)
-    const samEducs=new Set(),dimEducs=new Set();
+    // Détecter WE coupés (avertissement)
+    const samIds=new Set(),dimIds=new Set();
     joursWE.forEach(d=>{
       const ds=dayStr(d),dow=d.getDay();
       Object.entries(weAssigned[ds]||{}).forEach(([pid,ids])=>{
-        if(pid.startsWith('_')||!Array.isArray(ids)) return;
-        ids.forEach(id=>{
-          if(dow===6) samEducs.add(+id);
-          if(dow===0) dimEducs.add(+id);
-        });
+        if(pid.startsWith('_')||!Array.isArray(ids))return;
+        ids.forEach(id=>{if(dow===6)samIds.add(+id);if(dow===0)dimIds.add(+id);});
       });
     });
-    samEducs.forEach(id=>{if(!dimEducs.has(id)){const e=educById(id);if(e)warnings.push(`WE ${wn}: ${e.prenom} travaille seulement le samedi (WE coupé exceptionnel)`);}});
-    dimEducs.forEach(id=>{if(!samEducs.has(id)){const e=educById(id);if(e)warnings.push(`WE ${wn}: ${e.prenom} travaille seulement le dimanche (WE coupé exceptionnel)`);}});
+    samIds.forEach(id=>{if(!dimIds.has(id)){const e=educById(id);if(e)warnings.push(`WE ${wn}: ${e.prenom} seulement samedi (WE coupé exceptionnel)`);}});
+    dimIds.forEach(id=>{if(!samIds.has(id)){const e=educById(id);if(e)warnings.push(`WE ${wn}: ${e.prenom} seulement dimanche (WE coupé exceptionnel)`);}});
   }
 
   // ================================================================
@@ -875,18 +893,20 @@ async function genMois(moisStr,L){
       });
     }
 
-    // Si c'est un WE : utiliser les blocs pré-assignés
+    // Si c'est un WE : utiliser les blocs pré-assignés — VERROUILLÉS
+    // Les blocs WE sont structurellement fermés : E3 ne peut pas les modifier
     if(we&&weAssigned[ds]){
       Object.entries(weAssigned[ds]).forEach(([pid,ids])=>{
-        if(lockedSlots[ds]&&lockedSlots[ds][pid])return; // déjà verrouillé
+        if(lockedSlots[ds]&&lockedSlots[ds][pid])return;
         planning[ds][pid]=ids;
+        // Marquer comme verrouillé structurellement (pas modifiable par E3 ou swaps)
+        planning[ds]['_bloc_'+pid]='we_bloc';
         const p=plageById(+pid); if(!p) return;
         ids.forEach(eid=>{
           const e=educById(+eid); if(!e) return;
           const isPref=(e.prefs||[]).includes(+pid);
           planning[ds][`_s_${eid}_${pid}`]=isPref?'pref':'neutral';
         });
-        // Vérif min
         if(ids.length<(+p.min||1))
           warnings.push(`${ds} - ${p.nom}: ${ids.length}/${p.min} (bloc WE incomplet)`);
       });
@@ -979,7 +999,8 @@ async function genMois(moisStr,L){
         if(!checkLoi(e,d,ds,dow,plage).ok)return false;
         if(!checkConvention(e,d,ds,plage,1).ok)return false;
         const solde=hist[e.id].solde+(tracker[e.id].h-quotas[e.id].h.cible);
-        return solde<10;
+        // Passe B : uniquement si vraiment en déficit (solde < -3h) ou zone urgence
+        return solde<-3 || (traj[e.id]&&(traj[e.id].zone==='critique'||traj[e.id].zone==='danger'));
       }).map(e=>({e,sc:score(e,d,ds,plage,false,dow,false)}))
         .sort((a,b)=>a.sc-b.sc).slice(0,encore).map(x=>x.e);
       if(!cands.length)continue;
