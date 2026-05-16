@@ -1,149 +1,36 @@
 // ============================================================
-// algo.js - PlanEduc Pro - Moteur v14
+// algo.js - PlanEduc Pro - Moteur v17
 // ============================================================
-// PHILOSOPHIE : Horaire humain, stable, institutionnel
+// DEUX CORRECTIONS STRUCTURELLES :
+//  1. WE comme blocs atomiques (généré AVANT le reste)
+//  2. Trajectoire annuelle heures (zones urgence + pression progressive)
 //
-// Le moteur fonctionne comme un chef éducateur expérimenté :
-// - il conserve les habitudes existantes
-// - il ne change que ce qui doit changer
-// - il fait tourner uniquement le pénible (nuits, WE, fériés)
-// - il compense progressivement, jamais brutalement
-//
-// HIERARCHIE ABSOLUE :
+// HIERARCHIE :
 //  P1 - LOI           : repos 11h, 50h/sem, max consec, nuits consec
-//  P2 - EQUITE HEURES : ±15h/mois dur, 0 trimestriel
-//  P3 - STABILITE     : patterns, habitudes, semaines répétitives
-//  P4 - ROTATION DOUCE: nuits/WE/fériés tournent progressivement
-//  P5 - PREFERENCES   : demandes éducs
-//  P6 - MAXIMUM       : remplir si solde négatif
+//  P2 - TRAJECTOIRE H : zones urgence heures (critique = override tout)
+//  P3 - BLOCS WE      : attribués ensemble avant le reste
+//  P4 - STABILITE     : patterns, habitudes, cycles
+//  P5 - EQUITE DOUCE  : nuits/feries/types prorata contrat
+//  P6 - PREFERENCES   : demandes éducs
+//  P7 - MAXIMUM       : remplir si solde négatif
 //
-// 3 ETAPES :
-//  1. Construction stable (patterns + habitudes)
-//  2. Analyse équité
-//  3. Micro-ajustements ciblés (swaps nuits/WE seulement)
+// GENERATION EN 4 ETAPES :
+//  E1 - Calcul trajectoire annuelle
+//  E2 - Attribution blocs WE (atomique, sam+dim ensemble)
+//  E3 - Construction semaines normales autour des WE fixés
+//  E4 - Micro-ajustements (swaps nuits/WE uniquement)
 // ============================================================
 
 const DEBUG_MODE = false;
 
-// ── Helpers de base ──
+// ── Helpers ──
 const isNuitP  = p => p.type==='nuit'||p.debut>='22:00'||(p.fin<='07:00'&&p.fin>'00:00');
 const isReunion= p => p.type==='reunion'||(p.nom||'').toLowerCase().includes('reunion')||(p.nom||'').toLowerCase().includes('réunion');
 const isWEDay  = d => d.getDay()===0||d.getDay()===6;
 const dowIdx   = d => d.getDay()===0?6:d.getDay()-1;
 const ratioE   = e => getTargetH(e)/38;
-const dbg      = (...a)=>{if(DEBUG_MODE)console.log('[v13]',...a);};
-
-const POIDS = {reunion:0.05, matin:1.0, aprem:1.0, soir:1.2, nuit:2.0, journee:1.0};
-
-// ================================================================
-// LOGIQUE BLOCS WEEK-END
-// Le WE est traité comme une entité humaine cohérente, pas 2 jours
-// Pénibilité : nuit_dim > nuit_sam > jour_dim > jour_sam > coupé
-// ================================================================
-const PENIB_WE = {
-  nuit_ven:2.5, nuit_sam:2.5, nuit_dim:3.0,
-  jour_sam:1.0, jour_dim:1.2, aprem_sam:1.1, aprem_dim:1.3,
-  coupe:1.8  // sam travail + dim repos (ou inverse) = pénible
-};
-
-// Analyser le type de WE d'un educ sur un weekend donné
-function analyserBlocWE(planning, jours, weNum, educId){
-  const joursWE = jours.filter(d => weNumMap(jours)[dayStr(d)] === weNum);
-  let sam=[], dim=[];
-  joursWE.forEach(d=>{
-    const ds=dayStr(d), dow=d.getDay();
-    const myPlages = plages.filter(p=>{
-      const ids = ((planning[ds]||{})[p.id]||[]).map(x=>+x);
-      return ids.includes(educId);
-    });
-    if(dow===6) sam=myPlages;
-    if(dow===0) dim=myPlages;
-  });
-  const travSam=sam.length>0, travDim=dim.length>0;
-  if(!travSam&&!travDim) return {type:'repos',penib:0};
-  if(travSam&&travDim){
-    // Bloc complet — quel type ?
-    const nuitSam=sam.some(p=>isNuitP(p)&&!isReunion(p));
-    const nuitDim=dim.some(p=>isNuitP(p)&&!isReunion(p));
-    if(nuitSam&&nuitDim) return {type:'nuit_bloc',penib:5.0};
-    if(nuitDim)          return {type:'nuit_dim',penib:3.5};
-    if(nuitSam)          return {type:'nuit_sam',penib:3.0};
-    return {type:'jour_bloc',penib:2.0};
-  }
-  // WE coupé (un seul jour travaillé)
-  if(travSam) return {type:'coupe_sam',penib:1.8};
-  return {type:'coupe_dim',penib:2.0};
-}
-
-// Calculer la carte WE des educs sur l'historique
-function histWeBlocs(moisStr, horizon){
-  const [yr,mo]=moisStr.split('-').map(Number);
-  const weBlocs={}; // { educId: { penibTotale, coupés, blocsComplets, nuitsDim } }
-  educs.forEach(e=>{weBlocs[e.id]={penib:0,coupes:0,blocs:0,nuitsWE:0};});
-  for(let i=1;i<=horizon;i++){
-    const key=moisKey(yr,mo-i); const plan=horaire[key]; if(!plan) continue;
-    const [ky,km]=key.split('-').map(Number);
-    const joursMois=getDays(ky,km);
-    // Identifier les WE de ce mois
-    const weMap=weNumMap(joursMois);
-    const weNums=[...new Set(Object.values(weMap))];
-    weNums.forEach(wn=>{
-      educs.forEach(e=>{
-        const bloc=analyserBlocWE(plan,joursMois,wn,e.id);
-        weBlocs[e.id].penib+=bloc.penib;
-        if(bloc.type.startsWith('coupe')) weBlocs[e.id].coupes++;
-        if(bloc.type.endsWith('_bloc'))   weBlocs[e.id].blocs++;
-        if(bloc.type.includes('nuit'))    weBlocs[e.id].nuitsWE++;
-      });
-    });
-  }
-  return weBlocs;
-}
-
-// Calculer le numéro de WE pour chaque date
-function weNumMap(joursArr){
-  const map={};
-  let weNum=0, lastSat=-1;
-  joursArr.forEach(d=>{
-    if(d.getDay()===6){ weNum++; lastSat=d.getDate(); }
-    if(d.getDay()===0 && lastSat<0) weNum++; // mois commence un dimanche
-    if(isWEDay(d)) map[dayStr(d)]=weNum;
-  });
-  return map;
-}
-
-// Score de cohérence WE : bonus si l'educ travaille déjà l'autre jour de ce WE
-// → favorise les blocs complets, pénalise les WE coupés
-function scoreCohérenceWE(planning, ds, d, educId){
-  const dow=d.getDay(); // 6=sam, 0=dim
-  let autreDow, autreDate;
-  if(dow===6){ // samedi → chercher dimanche
-    autreDate=new Date(d); autreDate.setDate(d.getDate()+1);
-  } else if(dow===0){ // dimanche → chercher samedi
-    autreDate=new Date(d); autreDate.setDate(d.getDate()-1);
-  } else return 0;
-  const autreDs=dayStr(autreDate);
-  const travailleAutre=Object.values(planning[autreDs]||{})
-    .some(ids=>Array.isArray(ids)&&ids.map(x=>+x).includes(educId));
-  if(travailleAutre) return -15; // déjà sur l'autre jour → bonus bloc complet
-  // Pas encore sur l'autre jour → léger malus (risque WE coupé)
-  return 3;
-}
-
-// Score alternance WE : favorise l'alternance travail/repos
-function scoreAlternanceWE(e, ds, weBlocs, tracker_e){
-  // Compter les WE travaillés récents
-  const myWE=(tracker_e.weCount||0);
-  // Si vient de faire un WE → favoriser le repos
-  if(tracker_e.dernierWE){
-    const dernierWEDate=new Date(tracker_e.dernierWE+'T12:00');
-    const thisDate=new Date(ds+'T12:00');
-    const diffSem=Math.floor((thisDate-dernierWEDate)/604800000);
-    if(diffSem<2) return 20; // WE trop proche → pénalité forte
-    if(diffSem===2) return -8; // 2 sem d'écart → bonus léger (bonne alternance)
-  }
-  return 0;
-}
+const dbg      = (...a)=>{if(DEBUG_MODE)console.log('[v15]',...a);};
+const POIDS    = {reunion:0.05,matin:1.0,aprem:1.0,soir:1.2,nuit:2.0};
 
 function dureeH(p){
   if(p.dureeH&&p.dureeH>0) return p.dureeH;
@@ -158,7 +45,6 @@ function typePlage(p){
 function joursOuvMois(yr,mo){
   return getDays(yr,mo).filter(d=>{const dw=d.getDay();return dw>=1&&dw<=5&&!isFerie(dayStr(d));}).length;
 }
-function moy(arr,fn){ return arr.reduce((s,x)=>s+fn(x),0)/Math.max(1,arr.length); }
 function moyPond(arr,fn){ return arr.reduce((s,x)=>s+fn(x)/Math.max(0.01,ratioE(x)),0)/Math.max(1,arr.length); }
 function norm(val,e){ return val/Math.max(0.01,ratioE(e)); }
 
@@ -167,19 +53,85 @@ function plageById(id){if(!_pm||_pm.size!==plages.length)_pm=new Map(plages.map(
 function educById(id){if(!_em||_em.size!==educs.length)_em=new Map(educs.map(e=>[e.id,e]));return _em.get(+id);}
 
 // ================================================================
-// PATTERNS PERSISTANTS (habitudes hebdomadaires)
-// { educId: { dow: { plageId: count } } }
+// TRAJECTOIRE ANNUELLE — ZONES D'URGENCE
+// ================================================================
+// Calcule pour chaque educ :
+// - heures déjà faites cette année
+// - objectif annuel
+// - heures restantes à produire
+// - zone urgence (normale/attention/critique/danger)
+function calculerTrajectoireAnnuelle(moisStr){
+  const [yr,mo]=moisStr.split('-').map(Number);
+  const anneeStr=String(yr);
+  const moisRestants=Math.max(1, 13-mo); // mois restants dans l'année
+  const traj={};
+
+  educs.forEach(e=>{
+    const re=ratioE(e);
+    // Objectif annuel : utilise heuresAnnuelles si défini, sinon calcul réaliste
+    // heuresAnnuelles = volume annuel brut de l'éducateur (ex: 1976h pour TP belge)
+    // Si non défini : 52 semaines × heures hebdo contrat × ratio
+    const objectifAnnuel = e.heuresAnnuelles
+      ? +e.heuresAnnuelles  // valeur réelle encodée dans le profil
+      : getTargetH(e)*52;   // 52 semaines × heures hebdo (ex: 38×52=1976h TP)
+    // Heures déjà faites cette année (tous mois générés)
+    let hFaites=0;
+    let moisGeneres=0;
+    Object.keys(horaire).filter(k=>k.startsWith(anneeStr)&&k<moisStr).forEach(mk=>{
+      const [ky,km]=mk.split('-').map(Number);
+      const joursMois=getDays(ky,km);
+      joursMois.forEach(day=>{
+        const ds=dayStr(day);
+        Object.entries(horaire[mk][ds]||{}).forEach(([pid,ids])=>{
+          if(pid.startsWith('_')||!Array.isArray(ids)) return;
+          const p=plageById(+pid); if(!p) return;
+          if(ids.map(x=>+x).includes(e.id)) hFaites+=dureeH(p);
+        });
+      });
+      moisGeneres++;
+    });
+    // Heures restantes à produire
+    const hRestantes=objectifAnnuel-hFaites;
+    // Capacité théorique restante (mois restants × cible mensuelle)
+    const cibleMensuelle=joursOuvMois(yr,mo)*7.6*re; // cible mois actuel
+    const capaciteRestante=moisRestants*cibleMensuelle;
+    // Solde trajectoire : hRestantes - capaciteRestante
+    const soldeAnnuel=hFaites-(objectifAnnuel*(mo-1)/12); // avance/retard sur la trajectoire
+    // Zone urgence
+    // Zones urgence plafonnées : max 2.2 pour éviter comportements extrêmes
+    let zone='normale', urgenceMult=1.0;
+    if(soldeAnnuel<-50){zone='danger';urgenceMult=2.2;}    // plafonné (était 4.0)
+    else if(soldeAnnuel<-30){zone='critique';urgenceMult=1.8;} // plafonné (était 3.0)
+    else if(soldeAnnuel<-15){zone='attention';urgenceMult=1.4;}
+    else if(soldeAnnuel>30){zone='surplus';urgenceMult=1.8;}
+    else if(soldeAnnuel>15){zone='ok_positif';urgenceMult=1.3;}
+    traj[e.id]={objectifAnnuel,hFaites,hRestantes,soldeAnnuel,zone,urgenceMult,moisRestants};
+  });
+  return traj;
+}
+
+// Pression selon le mois — plafonnée pour éviter comportements extrêmes
+const PRESSION_MAX_GLOBAL=2.2; // jamais > 2.2x même en décembre zone critique
+function pressionMois(mo){
+  if(mo>=12) return 2.2;
+  if(mo>=11) return 2.0;
+  if(mo>=9)  return 1.7;
+  if(mo>=6)  return 1.4;
+  if(mo>=3)  return 1.2;
+  return 1.0;
+}
+
+// ================================================================
+// PATTERNS PERSISTANTS
 // ================================================================
 function loadPatterns(){ try{return JSON.parse(localStorage.getItem('planeduc_v3_patterns')||'{}');}catch(e){return {};} }
 function savePatterns(p){ try{localStorage.setItem('planeduc_v3_patterns',JSON.stringify(p));}catch(e){} }
 
 function buildPatterns(moisStr){
-  // Analyser les 4 derniers mois pour extraire les habitudes réelles
   const [yr,mo]=moisStr.split('-').map(Number);
   const patterns=loadPatterns();
   for(let i=1;i<=4;i++){
-    const key=moisKey(yr,mo-i);
-    const plan=horaire[key]; if(!plan) continue;
+    const key=moisKey(yr,mo-i); const plan=horaire[key]; if(!plan) continue;
     const [ky,km]=key.split('-').map(Number);
     getDays(ky,km).forEach(day=>{
       const ds=dayStr(day),dow=dowIdx(day);
@@ -194,43 +146,74 @@ function buildPatterns(moisStr){
       });
     });
   }
-  savePatterns(patterns);
-  return patterns;
+  savePatterns(patterns); return patterns;
 }
 
-// Bonus de stabilité — FORT pour les habitudes ancrées
-// Un éducateur qui a "toujours" fait cette plage ce jour est très prioritaire
-function bonusStabilite(e,dow,plage,patterns){
+function bonusStabilite(e,dow,plage,patterns,isWE){
   const pat=patterns[String(e.id)];
   if(!pat||!pat[dow]||!pat[dow][plage.id]) return 0;
   const cnt=pat[dow][plage.id]||0;
-  // Progression forte : l'habitude s'ancre exponentiellement
-  if(cnt>=8)  return -35; // très forte habitude → très prioritaire
-  if(cnt>=6)  return -28;
-  if(cnt>=4)  return -20;
-  if(cnt>=2)  return -12;
-  return -5;
+
+  // Usure progressive : au-delà de 8 occurrences, le bonus commence à s'éroder doucement
+  // pour éviter la rigidité permanente tout en conservant l'habitude
+  // L'usure est légère (max -20% du bonus) et non brutale
+  let usure=1.0;
+  if(cnt>12) usure=0.80;       // très ancré mais légère ouverture
+  else if(cnt>8) usure=0.90;   // bien ancré, légère pression diversification
+
+  const mult=(isWE?0.7:1.6)*usure;
+  if(cnt>=8) return -38*mult;
+  if(cnt>=6) return -30*mult;
+  if(cnt>=4) return -22*mult;
+  if(cnt>=2) return -13*mult;
+  return -5*mult;
+}
+
+// Détection spécialisation excessive : si >75% des prestations d'un type
+// on ajoute une légère pression de diversification
+function malusSpecialisation(e,tp,tracker_e,hist_e){
+  const types=tracker_e.types||{};
+  const histTypes=hist_e.types||{};
+  const total=Object.values(types).reduce((s,v)=>s+v,0)+Object.values(histTypes).reduce((s,v)=>s+v,0);
+  if(total<10) return 0; // pas assez de données
+  const myType=(types[tp]||0)+(histTypes[tp]||0);
+  const ratio=myType/Math.max(1,total);
+  if(ratio>0.75) return 8;  // très spécialisé → légère pression
+  if(ratio>0.60) return 4;
+  return 0;
+}
+
+// Score cycle personnel : bonus si l'educ suit son rythme hebdo habituel global
+// Ex: si quelqu'un travaille "souvent le mardi" → bonus sur tous les mardis
+function scoreCyclePersonnel(e,dow,patterns){
+  const pat=patterns[String(e.id)]; if(!pat||!pat[dow]) return 0;
+  // Compter le total de toutes les plages ce jour
+  const totalJour=Object.values(pat[dow]).reduce((s,v)=>s+v,0);
+  // Si l'educ travaille souvent ce jour → bonus
+  if(totalJour>=6) return -10;
+  if(totalJour>=4) return -6;
+  if(totalJour>=2) return -3;
+  return 0;
 }
 
 // ================================================================
 // STATS ANNUELLES
 // ================================================================
 function loadAnnualStats(){ try{return JSON.parse(localStorage.getItem('planeduc_v3_annual')||'{}');}catch(e){return {};} }
-
 function updateAnnualStats(moisStr){
   try{
     const yr=moisStr.split('-')[0];
     const stats=loadAnnualStats(); if(!stats[yr])stats[yr]={};
     const tot={};
-    educs.forEach(e=>{tot[e.id]={h:0,nuits:0,we:0,feries:0,matin:0,aprem:0,soir:0,reunion:0};});
+    educs.forEach(e=>{tot[e.id]={h:0,nuits:0,we:0,feries:0,matin:0,aprem:0,soir:0,reunion:0,samNuit:0,dimNuit:0,samJour:0,dimJour:0,weBlocs:0,weCoupes:0};});
     Object.keys(horaire).filter(k=>k.startsWith(yr)).forEach(mk=>{
       const [ky,km]=mk.split('-').map(Number);
       getDays(ky,km).forEach(day=>{
-        const ds=dayStr(day),weD=isWEDay(day),feD=isFerie(ds);
+        const ds=dayStr(day),dow=day.getDay(),weD=isWEDay(day),feD=isFerie(ds);
         Object.entries(horaire[mk][ds]||{}).forEach(([pid,ids])=>{
           if(pid.startsWith('_')||!Array.isArray(ids)) return;
           const p=plageById(+pid); if(!p) return;
-          const tp=typePlage(p);
+          const tp=typePlage(p),nuit=isNuitP(p);
           ids.forEach(eid=>{
             const id=+eid; if(!tot[id]) return;
             tot[id].h+=dureeH(p);
@@ -241,6 +224,10 @@ function updateAnnualStats(moisStr){
             if(tp==='reunion') tot[id].reunion++;
             if(weD) tot[id].we++;
             if(feD) tot[id].feries++;
+            if(dow===6&&nuit) tot[id].samNuit++;
+            if(dow===0&&nuit) tot[id].dimNuit++;
+            if(dow===6&&!nuit) tot[id].samJour++;
+            if(dow===0&&!nuit) tot[id].dimJour++;
           });
         });
       });
@@ -251,23 +238,18 @@ function updateAnnualStats(moisStr){
 }
 
 // ================================================================
-// VERROUILLAGES MANUELS
+// VERROUILLAGES
 // ================================================================
 function getLockedSlots(moisStr){
-  const plan=horaire[moisStr]||{}, locked={};
+  const plan=horaire[moisStr]||{},locked={};
   Object.entries(plan).forEach(([ds,slots])=>{
     Object.entries(slots).forEach(([pid,val])=>{
-      if(pid.startsWith('_')) return;
-      if(!Array.isArray(val)) return;
-      if(slots['_lock_'+pid]==='locked'){
-        if(!locked[ds])locked[ds]={};
-        locked[ds][pid]=val;
-      }
+      if(pid.startsWith('_')||!Array.isArray(val)) return;
+      if(slots['_lock_'+pid]==='locked'){if(!locked[ds])locked[ds]={};locked[ds][pid]=val;}
     });
   });
   return locked;
 }
-
 function toggleLock(ds,plageId){
   const mo=ds.slice(0,7);
   if(!horaire[mo]||!horaire[mo][ds]) return;
@@ -277,62 +259,65 @@ function toggleLock(ds,plageId){
 }
 
 // ================================================================
-// DETECTION D'IMPOSSIBILITES
+// DETECTION IMPOSSIBILITES
 // ================================================================
 function detecterImpossibilites(moisStr){
   const [yr,mo]=moisStr.split('-').map(Number);
-  const jours=getDays(yr,mo); const msgs=[];
+  const jours=getDays(yr,mo),msgs=[];
   plages.forEach(p=>{
     jours.forEach(d=>{
       const ds=dayStr(d),dow=dowIdx(d),we=isWEDay(d),fe=isFerie(ds);
       const dc=(fe&&!we)?5:dow; if(!p.jours.includes(dc)) return;
       const dispo=educs.filter(e=>(e.jours||[]).includes(dow)&&!isAbsent(e.id,ds)).length;
-      if(dispo<(+p.min||1)) msgs.push(`${ds} - ${p.nom}: ${dispo}/${p.min} educ(s) disponible(s)`);
+      if(dispo<(+p.min||1)) msgs.push(`${ds} - ${p.nom}: ${dispo}/${p.min} dispo`);
     });
   });
   return msgs;
 }
 
 // ================================================================
-// CALCUL QUOTAS (avec équité progressive douce)
+// QUOTAS
 // ================================================================
-function calculerQuotas(hist,jours,moisStr){
+function calculerQuotas(hist,jours,moisStr,traj){
   const [yr,mo]=moisStr.split('-').map(Number);
   const joursOuv=joursOuvMois(yr,mo);
   const poidsTotal=educs.reduce((s,e)=>s+ratioE(e),0);
   const annStats=loadAnnualStats()[yr]||{};
   const quotas={};
-
   educs.forEach(e=>{
     const re=ratioE(e);
     const base=joursOuv*7.6*re;
-    // Correction douce du solde : max ±6h (progressive, pas brutale)
-    const ajust=Math.max(-6,Math.min(6,-(hist[e.id].solde||0)*0.35));
+    // Ajustement basé sur la trajectoire annuelle (pas juste solde historique)
+    const t=traj[e.id];
+    let ajustTraj=0;
+    if(t){
+      // Si en retard sur la trajectoire → augmenter le quota mensuel
+      // Si en avance → réduire légèrement
+      const retardMensuel=t.soldeAnnuel/Math.max(1,t.moisRestants);
+      ajustTraj=Math.max(-12,Math.min(12,-retardMensuel*0.6));
+    }
+    const ajustSolde=Math.max(-6,Math.min(6,-(hist[e.id].solde||0)*0.3));
+    const ajustTotal=Math.max(-15,Math.min(15,ajustTraj+ajustSolde));
     quotas[e.id]={
-      h:{cible:base+ajust, min:base-15, max:base+15},
-      plage:{}, types:{},
-      ann:(annStats[e.id]||{nuits:0,we:0,feries:0}),
-      exceptionsUsees:0, exceptionsMax:3
+      h:{cible:base+ajustTotal,min:base-15,max:base+15},
+      plage:{},types:{},
+      ann:annStats[e.id]||{nuits:0,we:0,feries:0},
+      exceptionsUsees:0,exceptionsMax:3
     };
-
     plages.forEach(p=>{
       if(isReunion(p)){quotas[e.id].plage[p.id]={cible:999,min:0,max:999};return;}
-      const ja=jours.filter(d=>{
-        const di=dowIdx(d),dc=(isFerie(dayStr(d))&&!isWEDay(d))?5:di;
-        return p.jours.includes(dc);
-      }).length;
+      const ja=jours.filter(d=>{const di=dowIdx(d),dc=(isFerie(dayStr(d))&&!isWEDay(d))?5:di;return p.jours.includes(dc);}).length;
       const totalPostes=ja*(+p.min||1);
       const cible=totalPostes*re/Math.max(0.01,poidsTotal);
-      // Correction historique très douce (0.2) pour ne pas casser la stabilité
       const myN=(hist[e.id].plageCount[p.id]||0)/Math.max(0.01,re);
       const avgN=moyPond(educs,x=>hist[x.id].plageCount[p.id]||0);
       const corr=(myN-avgN)*re*0.2;
-      // Correction annuelle nuits (très légère)
-      const corrAnn=isNuitP(p)?Math.max(-1,Math.min(1,(norm((annStats[e.id]||{}).nuits||0,e)-moyPond(educs,x=>(annStats[x.id]||{}).nuits||0))*re*0.1)):0;
+      const annNuits=(annStats[e.id]||{}).nuits||0;
+      const avgAnnN=moyPond(educs,x=>(annStats[x.id]||{}).nuits||0);
+      const corrAnn=isNuitP(p)?Math.max(-1,Math.min(1,(norm(annNuits,e)-avgAnnN)*re*0.1)):0;
       const c=Math.max(0,cible-corr-corrAnn);
       quotas[e.id].plage[p.id]={cible:c,min:Math.max(0,Math.floor(c-2)),max:Math.ceil(c+2)};
     });
-
     ['matin','aprem','soir','nuit'].forEach(tp=>{
       const pts=plages.filter(p=>!isReunion(p)&&(tp==='nuit'?isNuitP(p):typePlage(p)===tp));
       let tot=0;
@@ -345,97 +330,6 @@ function calculerQuotas(hist,jours,moisStr){
     });
   });
   return quotas;
-}
-
-// ================================================================
-// PRE-ALLOCATION BLOCS WEEK-END (sam+dim ensemble)
-// Attribue les WE en blocs cohérents avant la génération normale
-// ================================================================
-function preAllouerBlocsWE(jours, hist, weBlocsHist, weMap){
-  const preAllocWE={}; // { ds: { plageId: [educId,...] } }
-  const annStats=loadAnnualStats()[Object.keys(horaire).sort().pop()?.split('-')[0]||new Date().getFullYear().toString()]||{};
-
-  // Grouper les jours par numéro de WE
-  const weGroups={}; // { weNum: [dayStr, ...] }
-  Object.entries(weMap).forEach(([ds,wn])=>{
-    if(!weGroups[wn]) weGroups[wn]=[];
-    weGroups[wn].push(ds);
-  });
-
-  // Pour chaque WE du mois, attribuer en bloc
-  Object.entries(weGroups).sort().forEach(([wn, dsList])=>{
-    // Trier sam avant dim
-    const sorted=dsList.sort();
-
-    // Calculer un score WE par educ (qui devrait travailler ce WE ?)
-    const candidatsWE=educs.map(e=>{
-      const myPenib=norm(weBlocsHist[e.id]?.penib||0,e);
-      const avgPenib=moyPond(educs,x=>weBlocsHist[x.id]?.penib||0);
-      const ecPenib=myPenib-avgPenib;
-      const myWE=norm((hist[e.id]?.we||0),e);
-      const avgWE=moyPond(educs,x=>hist[x.id]?.we||0);
-      const ecWE=myWE-avgWE;
-      // Score : moins de WE = prioritaire, moins pénible = prioritaire
-      const sc=ecWE*8+ecPenib*6;
-      return {e, sc};
-    }).sort((a,b)=>a.sc-b.sc);
-
-    // On ne pré-alloue que les plages nuit WE (les plus critiques à bloquer)
-    sorted.forEach(ds=>{
-      const d=new Date(ds+'T12:00');
-      const dow=dowIdx(d), we=true, fe=isFerie(ds);
-      const dc=fe?5:dow;
-      preAllocWE[ds]={};
-      plages.filter(p=>p.jours.includes(dc)&&isNuitP(p)&&!isReunion(p)).forEach(p=>{
-        const reqMin=+p.min||1;
-        // Priorité aux educs ayant moins de nuits WE
-        const cands=candidatsWE
-          .filter(x=>(x.e.jours||[]).includes(dow)&&!isAbsent(x.e.id,ds))
-          .slice(0,reqMin).map(x=>x.e);
-        if(cands.length>0) preAllocWE[ds][p.id]=cands.map(e=>e.id);
-      });
-    });
-  });
-
-  return preAllocWE;
-}
-
-// ================================================================
-// PRE-ALLOCATION NUITS (vision mois complet)
-// ================================================================
-function preAllouerNuits(jours,hist,moisStr){
-  const preAlloc={};
-  const annStats=loadAnnualStats()[moisStr.split('-')[0]]||{};
-  const cpt={};
-  educs.forEach(e=>{cpt[e.id]={nuits:0,lastNuit:null,nuitsC:0};});
-
-  jours.filter(d=>{
-    const dow=dowIdx(d),we=isWEDay(d),fe=isFerie(dayStr(d));
-    const dc=(fe&&!we)?5:dow;
-    return plages.some(p=>p.jours.includes(dc)&&isNuitP(p)&&!isReunion(p));
-  }).forEach(d=>{
-    const ds=dayStr(d),dow=dowIdx(d),we=isWEDay(d),fe=isFerie(ds);
-    const dc=(fe&&!we)?5:dow;
-    preAlloc[ds]={};
-    plages.filter(p=>p.jours.includes(dc)&&isNuitP(p)&&!isReunion(p)).forEach(p=>{
-      const reqMin=+p.min||1;
-      const cands=educs.filter(e=>{
-        if(!(e.jours||[]).includes(dow)||isAbsent(e.id,ds)) return false;
-        if(cpt[e.id].nuitsC>=2) return false;
-        if(cpt[e.id].lastNuit&&Math.round((d-new Date(cpt[e.id].lastNuit))/86400000)<=1) return false;
-        return true;
-      }).sort((a,b)=>{
-        // Trier par nuits normalisées (annuel inclus) : moins de nuits = prioritaire
-        const nA=norm((hist[a.id].nuits||0)+((annStats[a.id]||{}).nuits||0)+cpt[a.id].nuits,a);
-        const nB=norm((hist[b.id].nuits||0)+((annStats[b.id]||{}).nuits||0)+cpt[b.id].nuits,b);
-        return nA-nB;
-      }).slice(0,reqMin);
-      preAlloc[ds][p.id]=cands.map(e=>e.id);
-      cands.forEach(e=>{cpt[e.id].nuits++;cpt[e.id].nuitsC++;cpt[e.id].lastNuit=ds;});
-    });
-    educs.forEach(e=>{if(cpt[e.id].lastNuit!==ds)cpt[e.id].nuitsC=0;});
-  });
-  return preAlloc;
 }
 
 // ================================================================
@@ -455,8 +349,8 @@ function hSem(trackerE,ds){
 // ================================================================
 function verifier(){
   const warns=[];
-  if(!educs.length)  warns.push({t:'err',m:'Aucun educateur defini.'});
-  if(!plages.length) warns.push({t:'err',m:'Aucune plage horaire definie.'});
+  if(!educs.length)warns.push({t:'err',m:'Aucun educateur defini.'});
+  if(!plages.length)warns.push({t:'err',m:'Aucune plage horaire definie.'});
   const rc=document.getElementById('gen-recap'),ri=document.getElementById('gen-recap-content');
   rc.style.display='block';
   let html=warns.map(w=>`<div class="alert a-${w.t}">! ${w.m}</div>`).join('');
@@ -478,81 +372,93 @@ async function lancer(){
   const mois=document.getElementById('gen-mois').value;
   if(!mois){alert('Choisissez un mois.');return;}
   const btn=document.getElementById('gen-btn');
-  btn.disabled=true; btn.innerHTML='<div class="spin"></div> Generation...';
+  btn.disabled=true;btn.innerHTML='<div class="spin"></div> Generation...';
   document.getElementById('gen-prog').style.display='block';
   document.getElementById('gen-alerts').innerHTML='';
-  const log=document.getElementById('gen-log'); log.innerHTML='';
+  const log=document.getElementById('gen-log');log.innerHTML='';
   const L=(m,p)=>{log.innerHTML+=m+'<br>';log.scrollTop=log.scrollHeight;if(p!=null)document.getElementById('gen-bar').style.width=p+'%';};
 
-  L('Detection impossibilites...',3); await sl(50);
+  L('Detection impossibilites...',3);await sl(50);
   const impos=detecterImpossibilites(mois);
   impos.forEach(msg=>L('⚠ '+msg,null));
 
   const result=await genMois(mois,L);
   window._lastDiagnostic=result.diagnostic||[];
 
-  L('Validation...',93); await sl(30);
+  L('Validation...',93);await sl(30);
   const validation=validatePlanning(result.planning,mois,result.tracker,result.quotas);
 
   horaire[mois]=result.planning;
-  currentMonth=mois; save();
+  currentMonth=mois;save();
   updateAnnualStats(mois);
   buildPatterns(mois);
 
   const qs=planningQualityScore(validation);
   L(`Score qualite : ${qs.score}/100 — ${qs.label}`,null);
+
+  // Afficher les zones urgence
+  result.traj&&Object.entries(result.traj).forEach(([eid,t])=>{
+    if(t.zone==='danger'||t.zone==='critique'){
+      const e=educById(+eid);
+      if(e) L(`⚠ ${e.prenom} ${e.nom} : zone ${t.zone} (${t.soldeAnnuel.toFixed(1)}h sur trajectoire annuelle)`,null);
+    }
+  });
+
   if(validation.errors.length) L(`⚠ ${validation.errors.length} poste(s) non couverts`,null);
   validation.warnings.slice(0,6).forEach(w=>L('! '+w,null));
   result.warnings.slice(0,4).forEach(w=>L('! '+w,null));
   L('Termine !',100);
 
-  btn.disabled=false; btn.innerHTML="Generer l'horaire";
-  const at=validation.errors.length?'warn':'ok';
-  showAlert('gen-alerts',at,`Horaire genere — Score : ${qs.score}/100 (${qs.label})${validation.errors.length?' — '+validation.errors.length+' poste(s) non couvert(s)':''}`);
+  btn.disabled=false;btn.innerHTML="Generer l'horaire";
+  showAlert('gen-alerts',validation.errors.length?'warn':'ok',`Horaire genere — Score : ${qs.score}/100 (${qs.label})`);
   updateMonthLabels();
 }
 
 // ================================================================
-// MOTEUR PRINCIPAL — 3 ETAPES
+// MOTEUR PRINCIPAL
 // ================================================================
 async function genMois(moisStr,L){
-  _pm=null; _em=null;
+  _pm=null;_em=null;
   const [yr,mo]=moisStr.split('-').map(Number);
   const jours=getDays(yr,mo);
-  const planning={}, warnings=[], diagnostic=[];
+  const planning={},warnings=[],diagnostic=[];
   const horizon=+document.getElementById('gen-horizon').value||3;
   const minRepos=getRule('min_repos',11);
   const maxCons=getRule('max_consec',6);
   const maxWeMois=getRule('max_we_mois',2);
   const reposNuit=getRule('repos_apres_nuit',1);
   const maxNuitsC=2;
+  const pression=pressionMois(mo);
 
-  L('Etape 1 : Historique et patterns...',6); await sl(30);
+  L('E1 : Trajectoire annuelle et historique...',5);await sl(30);
   const lockedSlots=getLockedSlots(moisStr);
 
-  // ── HISTORIQUE ──
+  // Trajectoire annuelle
+  const traj=calculerTrajectoireAnnuelle(moisStr);
+
+  // Historique
   const hist={};
   educs.forEach(e=>{
     hist[e.id]={solde:0,plageCount:{},we:0,ferie:0,nuits:0,types:{matin:0,aprem:0,soir:0,nuit:0,reunion:0}};
     plages.forEach(p=>hist[e.id].plageCount[p.id]=0);
   });
   for(let i=1;i<horizon;i++){
-    const key=moisKey(yr,mo-i); const plan=horaire[key]; if(!plan) continue;
+    const key=moisKey(yr,mo-i);const plan=horaire[key];if(!plan)continue;
     const [ky,km]=key.split('-').map(Number);
-    const joursMois=getDays(ky,km); const joursOuvH=joursOuvMois(ky,km);
-    const hTrav={}; educs.forEach(e=>hTrav[e.id]=0);
+    const joursMois=getDays(ky,km);const joursOuvH=joursOuvMois(ky,km);
+    const hTrav={};educs.forEach(e=>hTrav[e.id]=0);
     joursMois.forEach(day=>{
       const ds=dayStr(day),weD=isWEDay(day),feD=isFerie(ds);
       Object.entries(plan[ds]||{}).forEach(([pid,ids])=>{
-        if(pid.startsWith('_')||!Array.isArray(ids)) return;
-        const p=plageById(+pid); if(!p) return;
+        if(pid.startsWith('_')||!Array.isArray(ids))return;
+        const p=plageById(+pid);if(!p)return;
         const tp=typePlage(p);
         ids.forEach(eid=>{
-          const id=+eid; if(!hist[id]) return;
+          const id=+eid;if(!hist[id])return;
           hTrav[id]+=dureeH(p);
           hist[id].plageCount[p.id]=(hist[id].plageCount[p.id]||0)+1;
-          if(weD)hist[id].we++; if(feD)hist[id].ferie++;
-          if(isNuitP(p)&&!isReunion(p)) hist[id].nuits++;
+          if(weD)hist[id].we++;if(feD)hist[id].ferie++;
+          if(isNuitP(p)&&!isReunion(p))hist[id].nuits++;
           hist[id].types[tp]=(hist[id].types[tp]||0)+1;
         });
       });
@@ -560,31 +466,32 @@ async function genMois(moisStr,L){
     educs.forEach(e=>{hist[e.id].solde+=hTrav[e.id]-joursOuvH*7.6*ratioE(e);});
   }
 
-  L('Etape 1 : Quotas et pre-allocation nuits...',14); await sl(30);
-  const quotas=calculerQuotas(hist,jours,moisStr);
+  L('E1 : Quotas et patterns...',12);await sl(30);
+  const quotas=calculerQuotas(hist,jours,moisStr,traj);
   const patterns=buildPatterns(moisStr);
-  const preAlloc=preAllouerNuits(jours,hist,moisStr);
+  const annStats=loadAnnualStats()[yr]||{};
 
-  // Analyse des blocs WE historiques (pénibilité WE réelle)
-  const weBlocsHist=histWeBlocs(moisStr, Math.min(horizon,4));
-  // Carte des numéros de WE du mois
-  const weMap=weNumMap(jours);
+  // Grouper jours WE par numéro de weekend
+  const weMap={};let weNum=0,lastSat=-1;
+  jours.forEach(d=>{
+    if(d.getDay()===6){weNum++;lastSat=d.getDate();}
+    if(d.getDay()===0&&lastSat<0)weNum++;
+    if(isWEDay(d)) weMap[dayStr(d)]=weNum;
+  });
+  const weNums=[...new Set(Object.values(weMap))].sort((a,b)=>a-b);
 
-  // ── TRACKER ──
-  const tracker={};
-  const lastPrest={};
+  // Tracker
+  const tracker={};const lastPrest={};
   educs.forEach(e=>{
-    tracker[e.id]={h:0,nuits:0,nuitsC:0,weCount:0,weJours:new Set(),cons:0,lastDay:null,plageCount:{},types:{matin:0,aprem:0,soir:0,nuit:0,reunion:0},fatigue:0,joursH:{}};
+    tracker[e.id]={h:0,nuits:0,nuitsC:0,weCount:0,weJours:new Set(),cons:0,lastDay:null,plageCount:{},types:{matin:0,aprem:0,soir:0,nuit:0,reunion:0},fatigue:0,joursH:{},dernierWE:null};
     plages.forEach(p=>tracker[e.id].plageCount[p.id]=0);
     lastPrest[e.id]=null;
   });
-
-  // Continuite mois precedent
   const prevPlan=horaire[moisKey(yr,mo-1)]||{};
   Object.keys(prevPlan).sort().forEach(ds=>{
     Object.entries(prevPlan[ds]||{}).forEach(([pid,ids])=>{
-      if(pid.startsWith('_')||!Array.isArray(ids)) return;
-      const p=plageById(+pid); if(!p) return;
+      if(pid.startsWith('_')||!Array.isArray(ids))return;
+      const p=plageById(+pid);if(!p)return;
       ids.forEach(eid=>{
         const id=+eid;
         if(!lastPrest[id]||ds>lastPrest[id].date)
@@ -593,14 +500,14 @@ async function genMois(moisStr,L){
     });
   });
 
-  // ── P1 : LOI ──
+  // ── P1 : Vérification loi ──
   function checkLoi(e,d,ds,dow,plage){
-    if(!(e.jours||[]).includes(dow)) return {ok:false,raison:'Jour non travaillé'};
-    if(isAbsent(e.id,ds)) return {ok:false,raison:'Absence encodée'};
-    const t=tracker[e.id], re=isReunion(plage);
+    if(!(e.jours||[]).includes(dow))return{ok:false,raison:'Jour non travaillé'};
+    if(isAbsent(e.id,ds))return{ok:false,raison:'Absence'};
+    const t=tracker[e.id],re=isReunion(plage);
     if(!re){
-      if(t.cons>=maxCons) return {ok:false,raison:`Max ${maxCons}j consécutifs`};
-      if(isNuitP(plage)&&t.nuitsC>=maxNuitsC) return {ok:false,raison:'Max 2 nuits consécutives'};
+      if(t.cons>=maxCons)return{ok:false,raison:`Max ${maxCons}j consécutifs`};
+      if(isNuitP(plage)&&t.nuitsC>=maxNuitsC)return{ok:false,raison:'Max 2 nuits consécutives'};
       const la=lastPrest[e.id];
       if(la){
         const [lh,lm]=la.fin.split(':').map(Number);
@@ -608,165 +515,136 @@ async function genMois(moisStr,L){
         const finMs=new Date(la.date+'T00:00').getTime()+(la.pm?86400000:0)+(lh*60+lm)*60000;
         const debMs=new Date(ds+'T00:00').getTime()+(bh*60+bm)*60000;
         const dh=(debMs-finMs)/3600000;
-        if(dh>=0&&dh<minRepos) return {ok:false,raison:`Repos 11h (${dh.toFixed(1)}h dispo)`};
+        if(dh>=0&&dh<minRepos)return{ok:false,raison:`Repos 11h (${dh.toFixed(1)}h)`};
       }
       if(la&&la.isNuit&&reposNuit>0&&Math.round((d-new Date(la.date))/86400000)<=reposNuit)
-        return {ok:false,raison:'Repos après nuit'};
+        return{ok:false,raison:'Repos après nuit'};
       const maxHJ=isNuitP(plage)?14:11;
       const hJour=plages.filter(p2=>!isReunion(p2)).reduce((s,pp)=>{
         const ids=(planning[ds]||{})[pp.id];
         return Array.isArray(ids)&&ids.map(x=>+x).includes(e.id)?s+dureeH(pp):s;
       },0);
-      if(hJour+dureeH(plage)>maxHJ) return {ok:false,raison:`Max h/jour (${(hJour+dureeH(plage)).toFixed(1)}h)`};
+      if(hJour+dureeH(plage)>maxHJ)return{ok:false,raison:`Max h/jour`};
     }
-    if(hSem(tracker[e.id],ds)+dureeH(plage)>50) return {ok:false,raison:`Max 50h/sem`};
-    return {ok:true,raison:''};
+    if(hSem(tracker[e.id],ds)+dureeH(plage)>50)return{ok:false,raison:'Max 50h/sem'};
+    return{ok:true,raison:''};
   }
 
   function checkConvention(e,d,ds,plage,niveau){
     const re=isReunion(plage);
-    if(niveau<2&&!re&&(e.excls||[]).includes(plage.id)) return {ok:false,raison:'Plage refusée',bloquant:true};
-    if(!re&&isWEDay(d)&&tracker[e.id].weCount>=maxWeMois&&niveau<1) return {ok:false,raison:'Max WE/mois',bloquant:false};
+    if(niveau<2&&!re&&(e.excls||[]).includes(plage.id))return{ok:false,raison:'Plage refusée',dur:true};
+    if(!re&&isWEDay(d)&&tracker[e.id].weCount>=maxWeMois&&niveau<1)return{ok:false,raison:'Max WE/mois',dur:false};
     if(!re&&niveau===0){
-      // Solde heures : contrainte quasi-dure
-      const solde=hist[e.id].solde+(tracker[e.id].h-quotas[e.id].h.cible);
-      if(solde>14) return {ok:false,raison:`Solde +${solde.toFixed(1)}h`,bloquant:false};
-      // Quota max plage
+      const t=traj[e.id];
+      // Zone critique/danger → ignorer quota heures (rattrapage forcé)
+      if(t&&(t.zone==='danger'||t.zone==='critique')){
+        // En zone urgence : pas de blocage quota, sauf excls
+      } else {
+        const solde=hist[e.id].solde+(tracker[e.id].h-quotas[e.id].h.cible);
+        if(solde>14)return{ok:false,raison:`Solde +${solde.toFixed(1)}h`,dur:false};
+      }
       const myC=tracker[e.id].plageCount[plage.id]||0;
       const qMax=quotas[e.id]?.plage[plage.id]?.max;
       if(qMax!==undefined&&myC>=qMax&&quotas[e.id].exceptionsUsees>=quotas[e.id].exceptionsMax)
-        return {ok:false,raison:'Quota plage max',bloquant:false};
+        return{ok:false,raison:'Quota max',dur:false};
     }
-    return {ok:true,raison:''};
+    return{ok:true,raison:''};
   }
 
-  // ── SCORE ──
-  // La STABILITE a le poids le plus fort pour les prestations normales
-  // La ROTATION ne s'applique fort qu'aux nuits/WE/fériés
-  function score(e,d,ds,plage,weOrFerie,preAllocIds,dow){
+  // ── Score ──
+  function score(e,d,ds,plage,weOrFerie,dow,isWEContext){
     const t=tracker[e.id],ht=hist[e.id],re=ratioE(e),q=quotas[e.id];
-    const annS=loadAnnualStats()[moisStr.split('-')[0]]||{};
-    const ann=annS[e.id]||{nuits:0,we:0,feries:0};
-    const reunion=isReunion(plage), nuit=isNuitP(plage);
+    const ann=annStats[e.id]||{nuits:0,we:0,feries:0};
+    const tr=traj[e.id]||{zone:'normale',urgenceMult:1,soldeAnnuel:0};
+    const reunion=isReunion(plage),nuit=isNuitP(plage);
     let sc=0;
 
-    // ── P2 : Solde heures (quasi-contrainte dure) ──
-    // Pression annuelle progressive : forte en nov/dec
-    const moCourant=+moisStr.split('-')[1];
-    const pressionAnnuelle = moCourant>=11 ? 2.0 : moCourant>=9 ? 1.5 : moCourant>=6 ? 1.2 : 1.0;
+    // P2 : Trajectoire annuelle (quasi-contrainte)
     const solde=ht.solde+(t.h-q.h.cible);
-    if(solde>12)       sc+=40*pressionAnnuelle;
-    else if(solde>8)   sc+=20*pressionAnnuelle;
+    const urgMult=tr.urgenceMult*pression;
+    if(solde>12)       sc+=40*urgMult;
+    else if(solde>8)   sc+=20*urgMult;
     else if(solde>4)   sc+=8;
-    else if(solde<-12) sc-=40*pressionAnnuelle;
-    else if(solde<-8)  sc-=20*pressionAnnuelle;
+    else if(solde<-12) sc-=40*urgMult;
+    else if(solde<-8)  sc-=20*urgMult;
     else if(solde<-4)  sc-=8;
     else sc+=solde*1.5;
 
+    // Trajectoire annuelle directe
+    if(tr.soldeAnnuel<-50) sc-=50;
+    else if(tr.soldeAnnuel<-30) sc-=30;
+    else if(tr.soldeAnnuel<-15) sc-=15;
+    if(tr.soldeAnnuel>30) sc+=35;
+    else if(tr.soldeAnnuel>15) sc+=15;
+
     if(!reunion){
-      // ── P3 : STABILITE (poids FORT pour prestations normales) ──
-      if(!nuit&&!weOrFerie){
-        // Pour matins/après-midis/soirs normaux : bonus de stabilité très fort
-        sc+=bonusStabilite(e,dow,plage,patterns)*1.5;
-      } else {
-        // Pour nuits/WE/fériés : bonus de stabilité normal
-        sc+=bonusStabilite(e,dow,plage,patterns);
-      }
+      // P4 : Stabilité + Cycle personnel (fort pour semaine normale)
+      sc+=bonusStabilite(e,dow,plage,patterns,isWEContext);
+      if(!isWEContext) sc+=scoreCyclePersonnel(e,dow,patterns);
+      // Anti-rigidité : légère pression si trop spécialisé sur un type
+      if(!isWEContext) sc+=malusSpecialisation(e,typePlage(plage),t,ht);
 
-      // Bonus si c'est dans la pré-allocation (nuits)
-      if(preAllocIds&&preAllocIds.includes(e.id)) sc-=12;
-
-      // ── P4 : ROTATION pour le pénible (nuits/WE/fériés) ──
-      // Pour les matins/soirs normaux : équité très douce
-      const tp=typePlage(plage);
-
-      // Equité plage (normalisée par contrat)
+      // P5 : Équité prestations
       const myCP=norm((ht.plageCount[plage.id]||0)+(t.plageCount[plage.id]||0),e);
       const avgCP=moyPond(educs,x=>(hist[x.id].plageCount[plage.id]||0)+(tracker[x.id].plageCount[plage.id]||0));
       const ecP=myCP-avgCP;
-      if(nuit||weOrFerie){
-        // Rotation forte pour le pénible
-        sc+=ecP*12;
-        if(ecP<-1.5) sc-=18; if(ecP>1.5) sc+=15;
-      } else {
-        // Rotation très douce pour le normal
-        sc+=ecP*4;
-      }
+      if(nuit||weOrFerie){sc+=ecP*12;if(ecP<-1.5)sc-=18;if(ecP>1.5)sc+=15;}
+      else{sc+=ecP*4;}
 
-      // Equité type (nuit/soir/matin)
+      const tp=typePlage(plage);
       const myTP=norm((ht.types[tp]||0)+(t.types[tp]||0),e);
       const avgTP=moyPond(educs,x=>(hist[x.id].types[tp]||0)+(tracker[x.id].types[tp]||0));
       const ecT=myTP-avgTP;
-      if(nuit||weOrFerie){
-        sc+=ecT*10; if(ecT<-1)sc-=12; if(ecT>1)sc+=10;
-      } else {
-        sc+=ecT*3; // très doux pour le normal
-      }
+      if(nuit||weOrFerie){sc+=ecT*10;if(ecT<-1)sc-=12;if(ecT>1)sc+=10;}
+      else{sc+=ecT*3;}
 
-      // WE (annuel+mensuel + pénibilité réelle des blocs)
       if(weOrFerie){
         const myWE=norm((ht.we||0)+(t.weCount||0)+(ann.we||0),e);
-        const avgWE=moyPond(educs,x=>(hist[x.id].we||0)+(tracker[x.id].weCount||0)+((annS[x.id]||{}).we||0));
+        const avgWE=moyPond(educs,x=>(hist[x.id].we||0)+(tracker[x.id].weCount||0)+((annStats[x.id]||{}).we||0));
         const ecWE=myWE-avgWE;
-        sc+=ecWE*11; if(ecWE<-1)sc-=14; if(ecWE>1)sc+=11;
-
-        // Pénibilité WE réelle (blocs historiques normalisés)
-        const myPenib=norm(weBlocsHist[e.id]?.penib||0,e);
-        const avgPenib=moyPond(educs,x=>weBlocsHist[x.id]?.penib||0);
-        const ecPenib=myPenib-avgPenib;
-        sc+=ecPenib*8; if(ecPenib<-1.5)sc-=12; if(ecPenib>1.5)sc+=10;
-
-        // Malus si trop de WE coupés (pénible humainement)
-        const coupes=weBlocsHist[e.id]?.coupes||0;
-        const avgCoupes=moy(educs,x=>weBlocsHist[x.id]?.coupes||0);
-        if(coupes>avgCoupes+1) sc+=coupes*3;
-
-        // Cohérence bloc WE (favorise bloc complet sam+dim)
-        sc+=scoreCohérenceWE(planning,ds,d,e.id);
-
-        // Alternance WE (favorise 1 WE sur 2)
-        sc+=scoreAlternanceWE(e,ds,weBlocsHist,t);
+        sc+=ecWE*11;if(ecWE<-1)sc-=14;if(ecWE>1)sc+=11;
+        // Alternance WE : pénaliser si WE trop rapproché
+        if(t.dernierWE){
+          const diffSem=Math.floor((new Date(ds+'T12:00')-new Date(t.dernierWE+'T12:00'))/604800000);
+          if(diffSem<2) sc+=25; // trop rapproché
+          else if(diffSem===2) sc-=8; // bonne alternance
+        }
       }
 
-      // Fériés
       if(isFerie(ds)){
         const myF=norm((ht.ferie||0)+(ann.feries||0),e);
-        const avgF=moyPond(educs,x=>(hist[x.id].ferie||0)+((annS[x.id]||{}).feries||0));
+        const avgF=moyPond(educs,x=>(hist[x.id].ferie||0)+((annStats[x.id]||{}).feries||0));
         sc+=(myF-avgF)*12;
       }
 
-      // Nuits (annuel, poids max)
       if(nuit){
         const myN=norm((ht.nuits||0)+(t.nuits||0)+(ann.nuits||0),e);
-        const avgN=moyPond(educs,x=>(hist[x.id].nuits||0)+(tracker[x.id].nuits||0)+((annS[x.id]||{}).nuits||0));
+        const avgN=moyPond(educs,x=>(hist[x.id].nuits||0)+(tracker[x.id].nuits||0)+((annStats[x.id]||{}).nuits||0));
         const ecN=myN-avgN;
-        sc+=ecN*15; if(ecN<-1.5)sc-=22; if(ecN>1.5)sc+=18;
+        sc+=ecN*15;if(ecN<-1.5)sc-=22;if(ecN>1.5)sc+=18;
       }
 
-      // Fatigue (légère pénalité)
       sc+=t.fatigue*0.5;
     }
 
-    // ── P5 : Préférences ──
+    // P6 : Préférences
     if(!reunion&&(e.prefs||[]).includes(plage.id)) sc-=10;
     const dow2=d.getDay()===0?6:d.getDay()-1;
     (e.demandes||[]).forEach(dem=>{
       if(dem.jour===dow2&&(dem.plageIds||[]).includes(plage.id)){
-        if(dem.type==='eviter')  sc+=13;
-        if(dem.type==='prefere') sc-=13;
+        if(dem.type==='eviter')sc+=13;
+        if(dem.type==='prefere')sc-=13;
       }
     });
 
-    // Eviter double terrain (sauf pause acceptée)
     if(!reunion&&!e.acceptePause){
       const dejaTerrain=Object.keys(planning[ds]||{}).some(pid=>{
-        if(pid.startsWith('_')) return false;
-        const p2=plageById(+pid); if(!p2||isReunion(p2)) return false;
-        return ((planning[ds][pid]||[]).map(x=>+x)).includes(e.id);
+        if(pid.startsWith('_'))return false;
+        const p2=plageById(+pid);if(!p2||isReunion(p2))return false;
+        return(planning[ds][pid]||[]).map(x=>+x).includes(e.id);
       });
-      if(dejaTerrain) sc+=30;
+      if(dejaTerrain)sc+=30;
     }
-
     return sc;
   }
 
@@ -774,13 +652,13 @@ async function genMois(moisStr,L){
     const t=tracker[e.id],tp=typePlage(plage),re=isReunion(plage);
     const h=dureeH(plage);
     t.h+=h;
-    if(!t.joursH[ds])t.joursH[ds]=0; t.joursH[ds]+=h;
+    if(!t.joursH[ds])t.joursH[ds]=0;t.joursH[ds]+=h;
     if(!re){
       const diffJ=t.lastDay?Math.round((d-new Date(t.lastDay))/86400000):999;
-      t.cons=diffJ===1?t.cons+1:1; t.lastDay=ds;
+      t.cons=diffJ===1?t.cons+1:1;t.lastDay=ds;
       if(nuit){t.nuits++;t.nuitsC++;}else t.nuitsC=0;
       if(we&&!t.weJours.has(ds)){t.weJours.add(ds);if(d.getDay()===6){t.weCount++;t.dernierWE=ds;}}
-      const pw=POIDS[tp]||1.0;
+      const pw=POIDS[tp]||1;
       t.fatigue+=pw*(h>10?2:h>8?1.5:h>6?0.8:0.3)+(t.cons>4?1.2:0);
       t.fatigue=Math.min(18,t.fatigue*0.94);
       lastPrest[e.id]={date:ds,fin:plage.fin,isNuit:nuit,pm:plage.fin<plage.debut};
@@ -790,274 +668,428 @@ async function genMois(moisStr,L){
   }
 
   // ================================================================
-  // ETAPE 2 : GENERATION JOUR PAR JOUR
+  // E2 : GENERATION BLOCS WEEK-END (atomique)
+  // On attribue chaque WE en entier AVANT de générer les semaines
+  // sam+dim ensemble, validés ensemble
   // ================================================================
-  // Pré-allouer les WE en blocs cohérents
-  const preAllocWE = preAllouerBlocsWE(jours, hist, weBlocsHist, weMap);
+  // ── Pré-répartition globale (vision mois complet) ──
+  // Calculer la "capacité restante" par educ pour éviter de les épuiser trop tôt
+  const capaciteMois={};
+  educs.forEach(e=>{
+    const re=ratioE(e);
+    const solde=hist[e.id].solde;
+    const base=joursOuvMois(yr,mo)*7.6*re;
+    const ajust=Math.max(-6,Math.min(6,-solde*0.3));
+    const hCible=base+ajust;
+    // Nb de WE restants dans le mois
+    const nbWEMois=weNums.length;
+    // Quota WE indicatif : maxWeMois ou proportionnel
+    const quotaWEIndicatif=Math.min(maxWeMois, Math.round(nbWEMois*re));
+    capaciteMois[e.id]={
+      hCible,
+      quotaWE:quotaWEIndicatif,
+      weUtilises:0 // compteur pendant la génération
+    };
+  });
 
-  L('Etape 2 : Generation...',25);
+  L('E2 : Attribution blocs week-end...',20);await sl(30);
+
+  // Pour chaque WE du mois, calculer quel "bloc" attribuer à qui
+  const weAssigned={}; // { ds: { plageId: [educId,...] } }
+
+  // ── Attribution blocs WE atomiques ──
+  // 1. Construire les blocs disponibles pour chaque WE
+  // 2. Scorer le bloc ENTIER pour chaque educ
+  // 3. Attribuer le bloc complet d'un coup
+  // Les WE coupés ne sont autorisés qu'en cas d'impossibilité légale
+
+  for(const wn of weNums){
+    const joursWE=jours.filter(d=>weMap[dayStr(d)]===wn).sort((a,b)=>a-b);
+    if(!joursWE.length) continue;
+
+    // Construire la liste de toutes les plages de ce WE (tous jours)
+    const allSlotsWE=[]; // [{d, ds, dow, plage}]
+    joursWE.forEach(d=>{
+      const ds=dayStr(d),dow=dowIdx(d),fe=isFerie(ds);
+      const dc=(fe&&!isWEDay(d))?5:dow;
+      plages.filter(p=>p.jours.includes(dc)&&!isReunion(p)).forEach(p=>{
+        allSlotsWE.push({d,ds,dow,plage:p});
+      });
+    });
+
+    // Slots déjà verrouillés → recopier directement
+    allSlotsWE.forEach(({ds,plage})=>{
+      if(lockedSlots[ds]&&lockedSlots[ds][plage.id]){
+        if(!weAssigned[ds]) weAssigned[ds]={};
+        weAssigned[ds][plage.id]=lockedSlots[ds][plage.id];
+      }
+    });
+
+    // Scorer chaque educ sur le WE COMPLET
+    // Le score intègre : équité WE annuelle, alternance, trajectoire, quota
+    const scoreWE=educs.map(e=>{
+      let sc=0;
+      const ann=annStats[e.id]||{};
+      const t=traj[e.id]||{zone:'normale',urgenceMult:1,soldeAnnuel:0};
+
+      // Équité WE annuelle proratisée
+      const myWE=norm((hist[e.id].we||0)+(ann.we||0),e);
+      const avgWE=moyPond(educs,x=>(hist[x.id].we||0)+((annStats[x.id]||{}).we||0));
+      sc+=(myWE-avgWE)*13;
+
+      // Alternance WE : pénaliser si WE précédent trop proche
+      if(tracker[e.id].dernierWE){
+        const dernD=new Date(tracker[e.id].dernierWE+'T12:00');
+        const diffSem=Math.round((joursWE[0]-dernD)/604800000);
+        if(diffSem<=1) sc+=35;      // WE consécutifs = très pénalisant
+        else if(diffSem===2) sc-=8; // bonne alternance
+        else if(diffSem>=4) sc+=5;  // trop longtemps sans WE → prioritaire
+      }
+
+      // Trajectoire annuelle
+      if(t.soldeAnnuel<-30) sc-=22;
+      else if(t.soldeAnnuel<-15) sc-=10;
+      if(t.soldeAnnuel>30) sc+=18;
+      else if(t.soldeAnnuel>15) sc+=8;
+
+      // Solde mensuel
+      const soldeMois=hist[e.id].solde+(tracker[e.id].h-(quotas[e.id]?.h.cible||0));
+      if(soldeMois<-10) sc-=12;
+      if(soldeMois>10)  sc+=12;
+
+      // Max WE/mois déjà atteint ou quota indicatif atteint
+      if(tracker[e.id].weCount>=maxWeMois) sc+=50;
+      else if(capaciteMois[e.id]&&tracker[e.id].weCount>=(capaciteMois[e.id].quotaWE)) sc+=15;
+
+      // Stabilité pattern WE (habitude de ce WE)
+      joursWE.forEach(d=>{
+        const dow=dowIdx(d);
+        allSlotsWE.filter(s=>s.dow===dow).forEach(({plage})=>{
+          sc+=bonusStabilite(e,dow,plage,patterns,true)*0.5;
+        });
+      });
+
+      return{e,sc};
+    }).sort((a,b)=>a.sc-b.sc);
+
+    // ── attribuerBlocWE : attribution atomique du bloc complet ──
+    // On choisit d'abord les éducs qui vont FAIRE ce WE,
+    // puis on les distribue sur les plages — bloc inséparable.
+
+    // Etape A : déterminer combien d'éducs distincts sont nécessaires ce WE
+    const maxParPlage=Math.max(...allSlotsWE.filter(s=>!(lockedSlots[s.ds]&&lockedSlots[s.ds][s.plage.id])).map(s=>+s.plage.min||1),0);
+    // Simplification : on cible maxParPlage éducs pour le bloc
+    const nbEducsWE=Math.max(1,maxParPlage);
+
+    // Etape B : choisir le groupe optimal (top nbEducsWE selon scoreWE)
+    // Vérifier que le groupe peut légalement couvrir toutes les plages du bloc
+    function groupePeutCouvrir(groupe){
+      for(const {d,ds,dow,plage} of allSlotsWE){
+        if(lockedSlots[ds]&&lockedSlots[ds][plage.id]) continue;
+        const reqMin=+plage.min||1;
+        const valides=groupe.filter(e=>checkLoi(e,d,ds,dow,plage).ok);
+        if(valides.length<reqMin) return false;
+      }
+      return true;
+    }
+
+    // Chercher le meilleur groupe valide
+    let groupeChoisi=[];
+    const candidatsPossibles=scoreWE.filter(({e})=>{
+      // Au moins légalement capable de travailler un jour de ce WE
+      return allSlotsWE.some(({d,ds,dow,plage})=>checkLoi(e,d,ds,dow,plage).ok);
+    });
+    // Essayer avec les top nbEducsWE d'abord
+    const topCands=candidatsPossibles.slice(0,Math.min(nbEducsWE*2,candidatsPossibles.length)).map(x=>x.e);
+    if(groupePeutCouvrir(topCands.slice(0,nbEducsWE))){
+      groupeChoisi=topCands.slice(0,nbEducsWE);
+    } else {
+      // Fallback : utiliser tous les candidats disponibles
+      groupeChoisi=topCands;
+    }
+
+    // Etape C : distribuer le bloc sur les plages avec le groupe choisi
+    const dejaDansWE=new Set(groupeChoisi.map(e=>e.id));
+    const slotsTries=[...allSlotsWE].sort((a,b)=>{
+      const na=isNuitP(a.plage)?0:1,nb=isNuitP(b.plage)?0:1; return na-nb;
+    });
+
+    for(const {d,ds,dow,plage} of slotsTries){
+      if(lockedSlots[ds]&&lockedSlots[ds][plage.id]) continue;
+      if(!weAssigned[ds]) weAssigned[ds]={};
+      const reqMin=+plage.min||1, nuit=isNuitP(plage);
+
+      // Prioriser les membres du groupe choisi, puis élargir si besoin
+      let cands=groupeChoisi.filter(e=>checkLoi(e,d,ds,dow,plage).ok&&checkConvention(e,d,ds,plage,0).ok);
+      if(cands.length<reqMin){
+        // Elargir au-delà du groupe (cas exceptionnel)
+        const extra=scoreWE.filter(({e})=>!dejaDansWE.has(e.id)&&checkLoi(e,d,ds,dow,plage).ok&&checkConvention(e,d,ds,plage,1).ok).map(x=>x.e);
+        cands=[...cands,...extra];
+        extra.forEach(e=>dejaDansWE.add(e.id)); // les ajouter au bloc
+      }
+      if(cands.length<reqMin){
+        const urgence=scoreWE.filter(({e})=>checkLoi(e,d,ds,dow,plage).ok).map(x=>x.e);
+        cands=[...new Set([...cands,...urgence])];
+      }
+
+      const assigned=cands.slice(0,reqMin);
+      weAssigned[ds][plage.id]=assigned.map(e=>e.id);
+      assigned.forEach(e=>updateTracker(e,d,ds,plage,nuit,true));
+      if(assigned.length<reqMin)
+        warnings.push(`${ds} - ${plage.nom}: ${reqMin-assigned.length} poste(s) non couvert(s) (WE bloc)`);
+    }
+
+    // Vérification : si un educ est seulement sam ou seulement dim → WE coupé
+    // Logger mais ne pas casser (cas exceptionnels légaux)
+    const samEducs=new Set(),dimEducs=new Set();
+    joursWE.forEach(d=>{
+      const ds=dayStr(d),dow=d.getDay();
+      Object.entries(weAssigned[ds]||{}).forEach(([pid,ids])=>{
+        if(pid.startsWith('_')||!Array.isArray(ids)) return;
+        ids.forEach(id=>{
+          if(dow===6) samEducs.add(+id);
+          if(dow===0) dimEducs.add(+id);
+        });
+      });
+    });
+    samEducs.forEach(id=>{if(!dimEducs.has(id)){const e=educById(id);if(e)warnings.push(`WE ${wn}: ${e.prenom} travaille seulement le samedi (WE coupé exceptionnel)`);}});
+    dimEducs.forEach(id=>{if(!samEducs.has(id)){const e=educById(id);if(e)warnings.push(`WE ${wn}: ${e.prenom} travaille seulement le dimanche (WE coupé exceptionnel)`);}});
+  }
+
+  // ================================================================
+  // E3 : GENERATION SEMAINES NORMALES (autour des WE déjà fixés)
+  // ================================================================
+  L('E3 : Construction semaines...',40);
 
   for(let di=0;di<jours.length;di++){
-    if(di%3===0){L(`Jour ${di+1}/${jours.length}`,25+Math.round((di/jours.length)*55));await sl(0);}
+    if(di%3===0){L(`Jour ${di+1}/${jours.length}`,40+Math.round((di/jours.length)*45));await sl(0);}
     const d=jours[di],ds=dayStr(d),dow=dowIdx(d);
     const we=isWEDay(d),ferie=isFerie(ds);
     planning[ds]={};
 
-    // Recopier les verrouillages
+    // Recopier verrouillages
     if(lockedSlots[ds]){
       Object.entries(lockedSlots[ds]).forEach(([pid,ids])=>{
-        planning[ds][pid]=ids; planning[ds]['_lock_'+pid]='locked';
-        ids.forEach(eid=>{
-          const e=educById(+eid); if(!e) return;
-          const p=plageById(+pid); if(!p) return;
-          updateTracker(e,d,ds,p,isNuitP(p)&&!isReunion(p),we);
-        });
+        planning[ds][pid]=ids;planning[ds]['_lock_'+pid]='locked';
+        ids.forEach(eid=>{const e=educById(+eid);if(!e)return;const p=plageById(+pid);if(!p)return;updateTracker(e,d,ds,p,isNuitP(p)&&!isReunion(p),we);});
       });
     }
 
+    // Si c'est un WE : utiliser les blocs pré-assignés
+    if(we&&weAssigned[ds]){
+      Object.entries(weAssigned[ds]).forEach(([pid,ids])=>{
+        if(lockedSlots[ds]&&lockedSlots[ds][pid])return; // déjà verrouillé
+        planning[ds][pid]=ids;
+        const p=plageById(+pid); if(!p) return;
+        ids.forEach(eid=>{
+          const e=educById(+eid); if(!e) return;
+          const isPref=(e.prefs||[]).includes(+pid);
+          planning[ds][`_s_${eid}_${pid}`]=isPref?'pref':'neutral';
+        });
+        // Vérif min
+        if(ids.length<(+p.min||1))
+          warnings.push(`${ds} - ${p.nom}: ${ids.length}/${p.min} (bloc WE incomplet)`);
+      });
+      // Plages WE non couvertes par le bloc (réunions, etc.)
+      const dowForPlages=dowIdx(d);
+      const pjWE=plages.filter(p=>{
+        if((weAssigned[ds]||{})[p.id]!==undefined)return false; // déjà traité
+        if(lockedSlots[ds]&&lockedSlots[ds][p.id])return false;
+        return p.jours.includes(dowForPlages)&&isReunion(p);
+      });
+      for(const plage of pjWE){
+        const reqMin=+plage.min||1;
+        let cands=educs.filter(e=>checkLoi(e,d,ds,dow,plage).ok&&checkConvention(e,d,ds,plage,0).ok);
+        if(cands.length<reqMin)cands=educs.filter(e=>checkLoi(e,d,ds,dow,plage).ok);
+        const scored=cands.map(e=>({e,sc:score(e,d,ds,plage,true,dow,true)})).sort((a,b)=>a.sc-b.sc);
+        const assigned=scored.slice(0,reqMin).map(x=>x.e);
+        planning[ds][plage.id]=assigned.map(e=>e.id);
+        assigned.forEach(e=>{
+          planning[ds][`_s_${e.id}_${plage.id}`]='neutral';
+          updateTracker(e,d,ds,plage,false,true);
+        });
+      }
+      continue; // WE traité — passer au jour suivant
+    }
+
+    // Jours normaux (semaine + fériés)
     const dowForPlages=(ferie&&!we)?5:dow;
     const pjBase=plages.filter(p=>p.jours.includes(dowForPlages));
-
-    // Ordre : nuits→WE/fériés→longues→reste→réunions
     function prio(p){
-      if(isReunion(p)) return 10;
-      if(isNuitP(p))   return 0;
-      if(we||ferie)    return 1;
-      if(dureeH(p)>8)  return 2;
-      return 3;
+      if(isReunion(p))return 10; if(isNuitP(p))return 0;
+      if(ferie)return 1; if(dureeH(p)>8)return 2; return 3;
     }
     const pj=[...pjBase].sort((a,b)=>{
-      const pa=prio(a),pb=prio(b); if(pa!==pb) return pa-pb;
+      const pa=prio(a),pb=prio(b);if(pa!==pb)return pa-pb;
       const ca=educs.filter(e=>checkLoi(e,d,ds,dow,a).ok).length;
       const cb=educs.filter(e=>checkLoi(e,d,ds,dow,b).ok).length;
       return (ca/Math.max(1,+a.min||1))-(cb/Math.max(1,+b.min||1));
     });
 
-    const preAllocJour=preAlloc[ds]||{};
-
-    // ── PASSE A : Minimum obligatoire ──
     for(const plage of pj){
-      if(lockedSlots[ds]&&lockedSlots[ds][plage.id]) continue;
+      if(lockedSlots[ds]&&lockedSlots[ds][plage.id])continue;
       const nuit=isNuitP(plage)&&!isReunion(plage);
-      const reqMin=Math.max(0,+plage.min||1), useAll=plage.tous;
-      // Combiner pré-allocation nuits + pré-allocation blocs WE
-      const pIds=[...new Set([...(preAllocJour[plage.id]||[]),...((preAllocWE[ds]||{})[plage.id]||[])])];
-      const reunion=isReunion(plage);
+      const reqMin=Math.max(0,+plage.min||1),useAll=plage.tous;
       const diagD=[];
-
-      // Tester tous les educs (diagnostic)
       let cands=[];
       educs.forEach(e=>{
         const loi=checkLoi(e,d,ds,dow,plage);
         if(!loi.ok){diagD.push({nom:e.prenom+' '+e.nom,ini:(e.prenom[0]+e.nom[0]).toUpperCase(),color:e.color||'#888',ok:false,raison:loi.raison});return;}
         const conv=checkConvention(e,d,ds,plage,0);
-        if(!conv.ok){diagD.push({nom:e.prenom+' '+e.nom,ini:(e.prenom[0]+e.nom[0]).toUpperCase(),color:e.color||'#888',ok:false,raison:conv.raison+(conv.bloquant?'':' ⚠')});return;}
+        if(!conv.ok){diagD.push({nom:e.prenom+' '+e.nom,ini:(e.prenom[0]+e.nom[0]).toUpperCase(),color:e.color||'#888',ok:false,raison:conv.raison});return;}
         cands.push(e);
       });
+      if(cands.length<reqMin&&!useAll)cands=educs.filter(e=>checkLoi(e,d,ds,dow,plage).ok&&checkConvention(e,d,ds,plage,1).ok);
+      if(cands.length<reqMin&&!useAll){cands=educs.filter(e=>checkLoi(e,d,ds,dow,plage).ok);cands.forEach(e=>{if(quotas[e.id])quotas[e.id].exceptionsUsees++;});}
 
-      // Niveaux de relâchement
-      if(cands.length<reqMin&&!useAll)
-        cands=educs.filter(e=>checkLoi(e,d,ds,dow,plage).ok&&checkConvention(e,d,ds,plage,1).ok);
-      if(cands.length<reqMin&&!useAll){
-        cands=educs.filter(e=>checkLoi(e,d,ds,dow,plage).ok);
-        cands.forEach(e=>{if(quotas[e.id])quotas[e.id].exceptionsUsees++;});
-      }
-
-      const scored=cands.map(e=>({e,sc:score(e,d,ds,plage,we||ferie,pIds,dow)})).sort((a,b)=>a.sc-b.sc);
+      const scored=cands.map(e=>({e,sc:score(e,d,ds,plage,ferie,dow,false)})).sort((a,b)=>a.sc-b.sc);
       const n=useAll?scored.length:Math.min(reqMin,scored.length);
       const assigned=scored.slice(0,n).map(x=>x.e);
-
       planning[ds][plage.id]=assigned.map(e=>e.id);
       assigned.forEach(e=>diagD.push({nom:e.prenom+' '+e.nom,ini:(e.prenom[0]+e.nom[0]).toUpperCase(),color:e.color||'#888',ok:true,raison:'Assigné'}));
-
-      if(assigned.length<reqMin||(nuit||we||ferie))
-        diagnostic.push({ds,plage:plage.nom,couverte:assigned.length>=reqMin,details:diagD});
+      if(assigned.length<reqMin||(nuit||ferie))diagnostic.push({ds,plage:plage.nom,couverte:assigned.length>=reqMin,details:diagD});
 
       assigned.forEach(e=>{
-        const isExcl=!reunion&&(e.excls||[]).includes(plage.id);
+        const isExcl=!isReunion(plage)&&(e.excls||[]).includes(plage.id);
         const isPref=(e.prefs||[]).includes(plage.id);
         const dow2=d.getDay()===0?6:d.getDay()-1;
         const dem=(e.demandes||[]).find(x=>x.jour===dow2&&(x.plageIds||[]).includes(plage.id));
         const sk=`_s_${e.id}_${plage.id}`;
         if(isExcl){planning[ds][sk]='forced';warnings.push(`${ds} - ${plage.nom}: refusée assignée à ${e.prenom}`);}
         else if(dem&&dem.type==='eviter'){planning[ds][sk]='dem_evite';warnings.push(`${ds} - ${plage.nom}: demande de ${e.prenom} non respectée`);}
-        else if(dem&&dem.type==='prefere') planning[ds][sk]='dem_pref';
-        else if(isPref) planning[ds][sk]='pref';
+        else if(dem&&dem.type==='prefere')planning[ds][sk]='dem_pref';
+        else if(isPref)planning[ds][sk]='pref';
         else planning[ds][sk]='neutral';
-        updateTracker(e,d,ds,plage,nuit,we);
+        updateTracker(e,d,ds,plage,nuit,false);
       });
-
-      if(assigned.length<reqMin)
-        warnings.push(`${ds} - ${plage.nom}: ${reqMin-assigned.length} poste(s) non couvert(s)`);
+      if(assigned.length<reqMin)warnings.push(`${ds} - ${plage.nom}: ${reqMin-assigned.length} poste(s) non couvert(s)`);
     }
 
-    // ── PASSE B : Maximum ──
-    for(const plage of pj){
-      if(plage.tous||isReunion(plage)) continue;
-      if(lockedSlots[ds]&&lockedSlots[ds][plage.id]) continue;
+    // Passe B : maximum
+    const dowForMax=dowForPlages;
+    for(const plage of plages.filter(p=>p.jours.includes(dowForMax)&&!p.tous&&!isReunion(p))){
+      if(lockedSlots[ds]&&lockedSlots[ds][plage.id])continue;
+      if(we)continue; // WE déjà traité en bloc
       const reqMin=Math.max(0,+plage.min||1),reqMax=Math.max(reqMin,+plage.max||reqMin);
-      if(reqMax<=reqMin) continue;
+      if(reqMax<=reqMin)continue;
       const deja=(planning[ds][plage.id]||[]).map(x=>+x);
-      const encore=reqMax-deja.length; if(encore<=0) continue;
+      const encore=reqMax-deja.length;if(encore<=0)continue;
       const cands=educs.filter(e=>{
-        if(deja.includes(e.id)) return false;
-        if(!checkLoi(e,d,ds,dow,plage).ok) return false;
-        if(!checkConvention(e,d,ds,plage,1).ok) return false;
+        if(deja.includes(e.id))return false;
+        if(!checkLoi(e,d,ds,dow,plage).ok)return false;
+        if(!checkConvention(e,d,ds,plage,1).ok)return false;
         const solde=hist[e.id].solde+(tracker[e.id].h-quotas[e.id].h.cible);
         return solde<10;
-      }).map(e=>({e,sc:score(e,d,ds,plage,we||ferie,[],dow)}))
+      }).map(e=>({e,sc:score(e,d,ds,plage,false,dow,false)}))
         .sort((a,b)=>a.sc-b.sc).slice(0,encore).map(x=>x.e);
-      if(!cands.length) continue;
+      if(!cands.length)continue;
       planning[ds][plage.id]=[...deja,...cands.map(e=>e.id)];
       cands.forEach(e=>{
-        planning[ds][`_s_${e.id}_${plage.id}`]=(e.excls||[]).includes(plage.id)?'forced':(e.prefs||[]).includes(plage.id)?'pref':'neutral';
-        updateTracker(e,d,ds,plage,isNuitP(plage),we);
+        planning[ds][`_s_${e.id}_${plage.id}`]=(e.prefs||[]).includes(plage.id)?'pref':'neutral';
+        updateTracker(e,d,ds,plage,isNuitP(plage),false);
       });
     }
   }
 
   // ================================================================
-  // ETAPE 3 : MICRO-AJUSTEMENTS (swaps ciblés nuits/WE seulement)
-  // Ne pas toucher les matins/soirs stables !
+  // E4 : MICRO-AJUSTEMENTS (swaps nuits uniquement)
+  // NE PAS toucher les blocs WE déjà attribués
   // ================================================================
-  L('Etape 3 : Micro-ajustements...',83); await sl(30);
+  L('E4 : Micro-ajustements nuits...',87);await sl(30);
 
-  // Swaps uniquement pour nuits et WE — pas pour les prestations normales
-  const passesSwap=[
-    {nom:'nuits',keyFn:e=>norm((hist[e.id].nuits||0)+(tracker[e.id].nuits||0),e),filtre:p=>isNuitP(p)&&!isReunion(p),maxSwaps:50},
-    {nom:'WE',   keyFn:e=>norm((hist[e.id].we||0)+(tracker[e.id].weCount||0),e),filtre:p=>!isReunion(p),maxSwaps:25},
-  ];
-
-  for(const pass of passesSwap){
-    let sw=0;
-    for(let iter=0;iter<pass.maxSwaps;iter++){
-      let improved=false;
-      for(const ds of Object.keys(planning)){
-        if(lockedSlots[ds]) continue;
-        const d=new Date(ds+'T12:00'),dow=dowIdx(d),we=isWEDay(d);
-        // Pour les swaps WE : seulement les jours WE
-        if(pass.nom==='WE'&&!we) continue;
-        for(const plage of plages){
-          if(!pass.filtre(plage)) continue;
-          const ids=(planning[ds][plage.id]||[]).map(x=>+x); if(!ids.length) continue;
-          const reqMin=+plage.min||1;
-          for(const idIn of ids){
-            const eIn=educById(idIn); if(!eIn) continue;
-            const sIn=pass.keyFn(eIn);
-            for(const eOut of educs.filter(e=>!ids.includes(e.id))){
-              if(pass.keyFn(eOut)>=sIn-1.5) continue;
-              if(!swapValide(planning,ds,plage,idIn,eOut.id,reqMin,dow)) continue;
-              // Vérifier que ça n'empire pas le solde heures
-              const soldIn=hist[eIn.id].solde+(tracker[eIn.id].h-quotas[eIn.id].h.cible);
-              const soldOut=hist[eOut.id].solde+(tracker[eOut.id].h-quotas[eOut.id].h.cible);
-              if(soldOut-dureeH(plage)<-14) continue; // ne pas mettre eOut sous -15h
-              if(soldIn+dureeH(plage)>14)  continue;  // ne pas mettre eIn au-dessus de +15h
-              // Appliquer
-              const newIds=ids.filter(x=>x!==idIn).concat(eOut.id);
-              planning[ds][plage.id]=newIds;
-              delete planning[ds][`_s_${idIn}_${plage.id}`];
-              planning[ds][`_s_${eOut.id}_${plage.id}`]='neutral';
-              const h=dureeH(plage);
-              tracker[eIn.id].h=Math.max(0,tracker[eIn.id].h-h); tracker[eOut.id].h+=h;
-              tracker[eIn.id].plageCount[plage.id]=Math.max(0,(tracker[eIn.id].plageCount[plage.id]||0)-1);
-              tracker[eOut.id].plageCount[plage.id]=(tracker[eOut.id].plageCount[plage.id]||0)+1;
-              if(isNuitP(plage)){
-                tracker[eIn.id].nuits=Math.max(0,(tracker[eIn.id].nuits||0)-1);
-                tracker[eOut.id].nuits=(tracker[eOut.id].nuits||0)+1;
-              }
-              if(we){
-                tracker[eIn.id].weCount=Math.max(0,(tracker[eIn.id].weCount||0)-1);
-                tracker[eOut.id].weCount=(tracker[eOut.id].weCount||0)+1;
-              }
-              improved=true;sw++;break;
-            }
-            if(improved)break;
+  let sw=0;
+  for(let iter=0;iter<40;iter++){
+    let improved=false;
+    for(const ds of Object.keys(planning)){
+      if(isWEDay(new Date(ds+'T12:00')))continue; // pas de swap sur WE
+      if(lockedSlots[ds])continue;
+      const d=new Date(ds+'T12:00'),dow=dowIdx(d);
+      for(const plage of plages.filter(p=>isNuitP(p)&&!isReunion(p))){
+        const ids=(planning[ds][plage.id]||[]).map(x=>+x);if(!ids.length)continue;
+        const reqMin=+plage.min||1;
+        for(const idIn of ids){
+          const eIn=educById(idIn);if(!eIn)continue;
+          const nIn=norm((hist[eIn.id].nuits||0)+(tracker[eIn.id].nuits||0),eIn);
+          for(const eOut of educs.filter(e=>!ids.includes(e.id))){
+            const nOut=norm((hist[eOut.id].nuits||0)+(tracker[eOut.id].nuits||0),eOut);
+            if(nOut>=nIn-1.5)continue;
+            if(!(eOut.jours||[]).includes(dow)||isAbsent(eOut.id,ds))continue;
+            if(!checkLoi(eOut,d,ds,dow,plage).ok)continue;
+            const newIds=ids.filter(x=>x!==idIn).concat(eOut.id);
+            if(newIds.length<reqMin)continue;
+            if((planning[ds][plage.id]||[]).map(x=>+x).includes(eOut.id))continue;
+            const sIn=hist[eIn.id].solde+(tracker[eIn.id].h-quotas[eIn.id].h.cible);
+            const sOut=hist[eOut.id].solde+(tracker[eOut.id].h-quotas[eOut.id].h.cible);
+            if(sOut-dureeH(plage)<-14)continue;
+            if(sIn+dureeH(plage)>14)continue;
+            planning[ds][plage.id]=newIds;
+            delete planning[ds][`_s_${idIn}_${plage.id}`];
+            planning[ds][`_s_${eOut.id}_${plage.id}`]='neutral';
+            tracker[eIn.id].nuits=Math.max(0,(tracker[eIn.id].nuits||0)-1);
+            tracker[eOut.id].nuits=(tracker[eOut.id].nuits||0)+1;
+            tracker[eIn.id].h=Math.max(0,tracker[eIn.id].h-dureeH(plage));
+            tracker[eOut.id].h+=dureeH(plage);
+            tracker[eIn.id].plageCount[plage.id]=Math.max(0,(tracker[eIn.id].plageCount[plage.id]||0)-1);
+            tracker[eOut.id].plageCount[plage.id]=(tracker[eOut.id].plageCount[plage.id]||0)+1;
+            improved=true;sw++;break;
           }
           if(improved)break;
         }
         if(improved)break;
       }
-      if(!improved)break;
+      if(improved)break;
     }
-    if(sw>0) dbg(`Swap ${pass.nom}: ${sw}`);
-    await sl(0);
+    if(!improved)break;
   }
+  if(sw>0)dbg(`Swaps nuits: ${sw}`);
 
-  return {planning,warnings,diagnostic,tracker,quotas};
-}
-
-function swapValide(planning,ds,plage,idIn,idOut,reqMin,dow){
-  const eOut=educById(idOut); if(!eOut) return false;
-  if(!(eOut.jours||[]).includes(dow)||isAbsent(eOut.id,ds)) return false;
-  const newIds=(planning[ds][plage.id]||[]).map(x=>+x).filter(x=>x!==idIn).concat(idOut);
-  if(newIds.length<reqMin) return false;
-  if((planning[ds][plage.id]||[]).map(x=>+x).includes(idOut)) return false;
-  if(!isReunion(plage)&&!eOut.acceptePause){
-    const autreTerrain=Object.keys(planning[ds]||{}).some(pid=>{
-      if(pid.startsWith('_')) return false;
-      const p=plageById(+pid); if(!p||isReunion(p)) return false;
-      return (planning[ds][pid]||[]).map(x=>+x).includes(idOut);
-    });
-    if(autreTerrain) return false;
-  }
-  return true;
+  return{planning,warnings,diagnostic,tracker,quotas,traj};
 }
 
 // ================================================================
-// VALIDATION (toujours sauvegarder — planning partiel accepté)
+// VALIDATION
 // ================================================================
 function validatePlanning(planning,moisStr,tracker,quotas){
   const [yr,mo]=moisStr.split('-').map(Number);
   const jours=getDays(yr,mo);
   const errors=[],warns=[];
-
   jours.forEach(d=>{
     const ds=dayStr(d),dow=dowIdx(d),we=isWEDay(d),fe=isFerie(ds);
     const dc=(fe&&!we)?5:dow;
     plages.filter(p=>p.jours.includes(dc)).forEach(p=>{
       const ids=((planning[ds]||{})[p.id]||[]);
-      if(ids.length<(+p.min||1))
-        errors.push(`${ds} - ${p.nom}: ${ids.length}/${p.min} educs`);
+      if(ids.length<(+p.min||1))errors.push(`${ds} - ${p.nom}: ${ids.length}/${p.min}`);
     });
   });
-
-  const nTot={},wTot={},hTot={};
-  educs.forEach(e=>{nTot[e.id]=0;wTot[e.id]=0;hTot[e.id]=tracker?tracker[e.id]?.h||0:0;});
+  const nTot={},hTot={};
+  educs.forEach(e=>{nTot[e.id]=0;hTot[e.id]=tracker?tracker[e.id]?.h||0:0;});
   jours.forEach(d=>{
-    const ds=dayStr(d),we=isWEDay(d);
+    const ds=dayStr(d);
     plages.forEach(p=>{
       ((planning[ds]||{})[p.id]||[]).forEach(id=>{
-        if(isNuitP(p)&&!isReunion(p)) nTot[+id]=(nTot[+id]||0)+1;
-        if(we) wTot[+id]=(wTot[+id]||0)+1;
+        if(isNuitP(p)&&!isReunion(p))nTot[+id]=(nTot[+id]||0)+1;
       });
     });
   });
-
-  const avgNN=moyPond(educs,e=>nTot[e.id]||0); let ecNMax=0;
+  const avgNN=moyPond(educs,e=>nTot[e.id]||0);let ecNMax=0;
   educs.forEach(e=>{
-    const myN=norm(nTot[e.id]||0,e), ec=Math.abs(myN-avgNN);
-    if(ec>ecNMax) ecNMax=ec;
-    if(ec>4) warns.push(`Nuits : ${e.prenom} ecart ${ec.toFixed(1)}`);
+    const ec=Math.abs(norm(nTot[e.id]||0,e)-avgNN);
+    if(ec>ecNMax)ecNMax=ec;
+    if(ec>4)warns.push(`Nuits : ${e.prenom} écart ${ec.toFixed(1)}`);
   });
   let ecHMax=0;
   educs.forEach(e=>{
     const s=hTot[e.id]-(quotas?quotas[e.id]?.h.cible||0:0);
-    if(Math.abs(s)>ecHMax) ecHMax=Math.abs(s);
-    if(Math.abs(s)>15) warns.push(`Solde ${e.prenom}: ${s>=0?'+':''}${s.toFixed(1)}h`);
+    if(Math.abs(s)>ecHMax)ecHMax=Math.abs(s);
+    if(Math.abs(s)>15)warns.push(`Solde ${e.prenom}: ${s>=0?'+':''}${s.toFixed(1)}h`);
   });
-
-  const metrics={
-    equite:Math.max(0,100-ecNMax*12),
-    stabilite:85,
-    couverture:errors.length===0?100:Math.max(0,100-errors.length*15),
-    prefs:Math.max(0,100-warns.filter(w=>w.includes('demande')).length*10)
-  };
-  return {valid:true,errors,warnings:warns,metrics};
+  const metrics={equite:Math.max(0,100-ecNMax*12),stabilite:85,couverture:errors.length===0?100:Math.max(0,100-errors.length*15),prefs:Math.max(0,100-warns.filter(w=>w.includes('demande')).length*10)};
+  return{valid:true,errors,warnings:warns,metrics};
 }
 
 function planningQualityScore(validation){
   const m=validation.metrics||{equite:50,stabilite:50,couverture:50,prefs:50};
   const score=Math.round(m.equite*0.30+m.stabilite*0.30+m.couverture*0.30+m.prefs*0.10);
   const label=score>=85?'Excellent':score>=70?'Bon':score>=55?'Moyen':'À améliorer';
-  return {score,label,details:m};
+  return{score,label,details:m};
 }
