@@ -1,5 +1,5 @@
 // ============================================================
-// algo.js - PlanEduc Pro - Moteur v13
+// algo.js - PlanEduc Pro - Moteur v14
 // ============================================================
 // PHILOSOPHIE : Horaire humain, stable, institutionnel
 //
@@ -34,6 +34,116 @@ const ratioE   = e => getTargetH(e)/38;
 const dbg      = (...a)=>{if(DEBUG_MODE)console.log('[v13]',...a);};
 
 const POIDS = {reunion:0.05, matin:1.0, aprem:1.0, soir:1.2, nuit:2.0, journee:1.0};
+
+// ================================================================
+// LOGIQUE BLOCS WEEK-END
+// Le WE est traité comme une entité humaine cohérente, pas 2 jours
+// Pénibilité : nuit_dim > nuit_sam > jour_dim > jour_sam > coupé
+// ================================================================
+const PENIB_WE = {
+  nuit_ven:2.5, nuit_sam:2.5, nuit_dim:3.0,
+  jour_sam:1.0, jour_dim:1.2, aprem_sam:1.1, aprem_dim:1.3,
+  coupe:1.8  // sam travail + dim repos (ou inverse) = pénible
+};
+
+// Analyser le type de WE d'un educ sur un weekend donné
+function analyserBlocWE(planning, jours, weNum, educId){
+  const joursWE = jours.filter(d => weNumMap(jours)[dayStr(d)] === weNum);
+  let sam=[], dim=[];
+  joursWE.forEach(d=>{
+    const ds=dayStr(d), dow=d.getDay();
+    const myPlages = plages.filter(p=>{
+      const ids = ((planning[ds]||{})[p.id]||[]).map(x=>+x);
+      return ids.includes(educId);
+    });
+    if(dow===6) sam=myPlages;
+    if(dow===0) dim=myPlages;
+  });
+  const travSam=sam.length>0, travDim=dim.length>0;
+  if(!travSam&&!travDim) return {type:'repos',penib:0};
+  if(travSam&&travDim){
+    // Bloc complet — quel type ?
+    const nuitSam=sam.some(p=>isNuitP(p)&&!isReunion(p));
+    const nuitDim=dim.some(p=>isNuitP(p)&&!isReunion(p));
+    if(nuitSam&&nuitDim) return {type:'nuit_bloc',penib:5.0};
+    if(nuitDim)          return {type:'nuit_dim',penib:3.5};
+    if(nuitSam)          return {type:'nuit_sam',penib:3.0};
+    return {type:'jour_bloc',penib:2.0};
+  }
+  // WE coupé (un seul jour travaillé)
+  if(travSam) return {type:'coupe_sam',penib:1.8};
+  return {type:'coupe_dim',penib:2.0};
+}
+
+// Calculer la carte WE des educs sur l'historique
+function histWeBlocs(moisStr, horizon){
+  const [yr,mo]=moisStr.split('-').map(Number);
+  const weBlocs={}; // { educId: { penibTotale, coupés, blocsComplets, nuitsDim } }
+  educs.forEach(e=>{weBlocs[e.id]={penib:0,coupes:0,blocs:0,nuitsWE:0};});
+  for(let i=1;i<=horizon;i++){
+    const key=moisKey(yr,mo-i); const plan=horaire[key]; if(!plan) continue;
+    const [ky,km]=key.split('-').map(Number);
+    const joursMois=getDays(ky,km);
+    // Identifier les WE de ce mois
+    const weMap=weNumMap(joursMois);
+    const weNums=[...new Set(Object.values(weMap))];
+    weNums.forEach(wn=>{
+      educs.forEach(e=>{
+        const bloc=analyserBlocWE(plan,joursMois,wn,e.id);
+        weBlocs[e.id].penib+=bloc.penib;
+        if(bloc.type.startsWith('coupe')) weBlocs[e.id].coupes++;
+        if(bloc.type.endsWith('_bloc'))   weBlocs[e.id].blocs++;
+        if(bloc.type.includes('nuit'))    weBlocs[e.id].nuitsWE++;
+      });
+    });
+  }
+  return weBlocs;
+}
+
+// Calculer le numéro de WE pour chaque date
+function weNumMap(joursArr){
+  const map={};
+  let weNum=0, lastSat=-1;
+  joursArr.forEach(d=>{
+    if(d.getDay()===6){ weNum++; lastSat=d.getDate(); }
+    if(d.getDay()===0 && lastSat<0) weNum++; // mois commence un dimanche
+    if(isWEDay(d)) map[dayStr(d)]=weNum;
+  });
+  return map;
+}
+
+// Score de cohérence WE : bonus si l'educ travaille déjà l'autre jour de ce WE
+// → favorise les blocs complets, pénalise les WE coupés
+function scoreCohérenceWE(planning, ds, d, educId){
+  const dow=d.getDay(); // 6=sam, 0=dim
+  let autreDow, autreDate;
+  if(dow===6){ // samedi → chercher dimanche
+    autreDate=new Date(d); autreDate.setDate(d.getDate()+1);
+  } else if(dow===0){ // dimanche → chercher samedi
+    autreDate=new Date(d); autreDate.setDate(d.getDate()-1);
+  } else return 0;
+  const autreDs=dayStr(autreDate);
+  const travailleAutre=Object.values(planning[autreDs]||{})
+    .some(ids=>Array.isArray(ids)&&ids.map(x=>+x).includes(educId));
+  if(travailleAutre) return -15; // déjà sur l'autre jour → bonus bloc complet
+  // Pas encore sur l'autre jour → léger malus (risque WE coupé)
+  return 3;
+}
+
+// Score alternance WE : favorise l'alternance travail/repos
+function scoreAlternanceWE(e, ds, weBlocs, tracker_e){
+  // Compter les WE travaillés récents
+  const myWE=(tracker_e.weCount||0);
+  // Si vient de faire un WE → favoriser le repos
+  if(tracker_e.dernierWE){
+    const dernierWEDate=new Date(tracker_e.dernierWE+'T12:00');
+    const thisDate=new Date(ds+'T12:00');
+    const diffSem=Math.floor((thisDate-dernierWEDate)/604800000);
+    if(diffSem<2) return 20; // WE trop proche → pénalité forte
+    if(diffSem===2) return -8; // 2 sem d'écart → bonus léger (bonne alternance)
+  }
+  return 0;
+}
 
 function dureeH(p){
   if(p.dureeH&&p.dureeH>0) return p.dureeH;
@@ -238,6 +348,59 @@ function calculerQuotas(hist,jours,moisStr){
 }
 
 // ================================================================
+// PRE-ALLOCATION BLOCS WEEK-END (sam+dim ensemble)
+// Attribue les WE en blocs cohérents avant la génération normale
+// ================================================================
+function preAllouerBlocsWE(jours, hist, weBlocsHist, weMap){
+  const preAllocWE={}; // { ds: { plageId: [educId,...] } }
+  const annStats=loadAnnualStats()[Object.keys(horaire).sort().pop()?.split('-')[0]||new Date().getFullYear().toString()]||{};
+
+  // Grouper les jours par numéro de WE
+  const weGroups={}; // { weNum: [dayStr, ...] }
+  Object.entries(weMap).forEach(([ds,wn])=>{
+    if(!weGroups[wn]) weGroups[wn]=[];
+    weGroups[wn].push(ds);
+  });
+
+  // Pour chaque WE du mois, attribuer en bloc
+  Object.entries(weGroups).sort().forEach(([wn, dsList])=>{
+    // Trier sam avant dim
+    const sorted=dsList.sort();
+
+    // Calculer un score WE par educ (qui devrait travailler ce WE ?)
+    const candidatsWE=educs.map(e=>{
+      const myPenib=norm(weBlocsHist[e.id]?.penib||0,e);
+      const avgPenib=moyPond(educs,x=>weBlocsHist[x.id]?.penib||0);
+      const ecPenib=myPenib-avgPenib;
+      const myWE=norm((hist[e.id]?.we||0),e);
+      const avgWE=moyPond(educs,x=>hist[x.id]?.we||0);
+      const ecWE=myWE-avgWE;
+      // Score : moins de WE = prioritaire, moins pénible = prioritaire
+      const sc=ecWE*8+ecPenib*6;
+      return {e, sc};
+    }).sort((a,b)=>a.sc-b.sc);
+
+    // On ne pré-alloue que les plages nuit WE (les plus critiques à bloquer)
+    sorted.forEach(ds=>{
+      const d=new Date(ds+'T12:00');
+      const dow=dowIdx(d), we=true, fe=isFerie(ds);
+      const dc=fe?5:dow;
+      preAllocWE[ds]={};
+      plages.filter(p=>p.jours.includes(dc)&&isNuitP(p)&&!isReunion(p)).forEach(p=>{
+        const reqMin=+p.min||1;
+        // Priorité aux educs ayant moins de nuits WE
+        const cands=candidatsWE
+          .filter(x=>(x.e.jours||[]).includes(dow)&&!isAbsent(x.e.id,ds))
+          .slice(0,reqMin).map(x=>x.e);
+        if(cands.length>0) preAllocWE[ds][p.id]=cands.map(e=>e.id);
+      });
+    });
+  });
+
+  return preAllocWE;
+}
+
+// ================================================================
 // PRE-ALLOCATION NUITS (vision mois complet)
 // ================================================================
 function preAllouerNuits(jours,hist,moisStr){
@@ -402,6 +565,11 @@ async function genMois(moisStr,L){
   const patterns=buildPatterns(moisStr);
   const preAlloc=preAllouerNuits(jours,hist,moisStr);
 
+  // Analyse des blocs WE historiques (pénibilité WE réelle)
+  const weBlocsHist=histWeBlocs(moisStr, Math.min(horizon,4));
+  // Carte des numéros de WE du mois
+  const weMap=weNumMap(jours);
+
   // ── TRACKER ──
   const tracker={};
   const lastPrest={};
@@ -483,15 +651,17 @@ async function genMois(moisStr,L){
     let sc=0;
 
     // ── P2 : Solde heures (quasi-contrainte dure) ──
+    // Pression annuelle progressive : forte en nov/dec
+    const moCourant=+moisStr.split('-')[1];
+    const pressionAnnuelle = moCourant>=11 ? 2.0 : moCourant>=9 ? 1.5 : moCourant>=6 ? 1.2 : 1.0;
     const solde=ht.solde+(t.h-q.h.cible);
-    // Progressif : fort seulement quand on approche ±15h
-    if(solde>12)       sc+=40;  // fort blocage
-    else if(solde>8)   sc+=20;
+    if(solde>12)       sc+=40*pressionAnnuelle;
+    else if(solde>8)   sc+=20*pressionAnnuelle;
     else if(solde>4)   sc+=8;
-    else if(solde<-12) sc-=40;  // fort bonus
-    else if(solde<-8)  sc-=20;
+    else if(solde<-12) sc-=40*pressionAnnuelle;
+    else if(solde<-8)  sc-=20*pressionAnnuelle;
     else if(solde<-4)  sc-=8;
-    else sc+=solde*1.5; // zone normale : influence douce
+    else sc+=solde*1.5;
 
     if(!reunion){
       // ── P3 : STABILITE (poids FORT pour prestations normales) ──
@@ -533,12 +703,29 @@ async function genMois(moisStr,L){
         sc+=ecT*3; // très doux pour le normal
       }
 
-      // WE (annuel+mensuel)
+      // WE (annuel+mensuel + pénibilité réelle des blocs)
       if(weOrFerie){
         const myWE=norm((ht.we||0)+(t.weCount||0)+(ann.we||0),e);
         const avgWE=moyPond(educs,x=>(hist[x.id].we||0)+(tracker[x.id].weCount||0)+((annS[x.id]||{}).we||0));
         const ecWE=myWE-avgWE;
         sc+=ecWE*11; if(ecWE<-1)sc-=14; if(ecWE>1)sc+=11;
+
+        // Pénibilité WE réelle (blocs historiques normalisés)
+        const myPenib=norm(weBlocsHist[e.id]?.penib||0,e);
+        const avgPenib=moyPond(educs,x=>weBlocsHist[x.id]?.penib||0);
+        const ecPenib=myPenib-avgPenib;
+        sc+=ecPenib*8; if(ecPenib<-1.5)sc-=12; if(ecPenib>1.5)sc+=10;
+
+        // Malus si trop de WE coupés (pénible humainement)
+        const coupes=weBlocsHist[e.id]?.coupes||0;
+        const avgCoupes=moy(educs,x=>weBlocsHist[x.id]?.coupes||0);
+        if(coupes>avgCoupes+1) sc+=coupes*3;
+
+        // Cohérence bloc WE (favorise bloc complet sam+dim)
+        sc+=scoreCohérenceWE(planning,ds,d,e.id);
+
+        // Alternance WE (favorise 1 WE sur 2)
+        sc+=scoreAlternanceWE(e,ds,weBlocsHist,t);
       }
 
       // Fériés
@@ -592,7 +779,7 @@ async function genMois(moisStr,L){
       const diffJ=t.lastDay?Math.round((d-new Date(t.lastDay))/86400000):999;
       t.cons=diffJ===1?t.cons+1:1; t.lastDay=ds;
       if(nuit){t.nuits++;t.nuitsC++;}else t.nuitsC=0;
-      if(we&&!t.weJours.has(ds)){t.weJours.add(ds);if(d.getDay()===6)t.weCount++;}
+      if(we&&!t.weJours.has(ds)){t.weJours.add(ds);if(d.getDay()===6){t.weCount++;t.dernierWE=ds;}}
       const pw=POIDS[tp]||1.0;
       t.fatigue+=pw*(h>10?2:h>8?1.5:h>6?0.8:0.3)+(t.cons>4?1.2:0);
       t.fatigue=Math.min(18,t.fatigue*0.94);
@@ -605,6 +792,9 @@ async function genMois(moisStr,L){
   // ================================================================
   // ETAPE 2 : GENERATION JOUR PAR JOUR
   // ================================================================
+  // Pré-allouer les WE en blocs cohérents
+  const preAllocWE = preAllouerBlocsWE(jours, hist, weBlocsHist, weMap);
+
   L('Etape 2 : Generation...',25);
 
   for(let di=0;di<jours.length;di++){
@@ -650,7 +840,8 @@ async function genMois(moisStr,L){
       if(lockedSlots[ds]&&lockedSlots[ds][plage.id]) continue;
       const nuit=isNuitP(plage)&&!isReunion(plage);
       const reqMin=Math.max(0,+plage.min||1), useAll=plage.tous;
-      const pIds=preAllocJour[plage.id]||[];
+      // Combiner pré-allocation nuits + pré-allocation blocs WE
+      const pIds=[...new Set([...(preAllocJour[plage.id]||[]),...((preAllocWE[ds]||{})[plage.id]||[])])];
       const reunion=isReunion(plage);
       const diagD=[];
 
