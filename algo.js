@@ -29,12 +29,33 @@
 // ============================================================
 
 // ── Détection type de plage ──
+// IMPORTANT : les jours sont stockés avec les valeurs natives de getDay()
+// 0=dimanche, 1=lundi, 2=mardi, 3=mercredi, 4=jeudi, 5=samedi... MAIS
+// dans certains contextes dowIdx convertit dim(0) → 6.
+// Les plages sont toujours stockées avec les valeurs de l'interface (0-6 où 0=lun dans l'UI
+// OU 0=dim en natif). On normalise ici pour les deux cas.
+//
+// Valeurs plages dans l'UI : 0=lun,1=mar,2=mer,3=jeu,4=ven,5=sam,6=dim
+// Valeurs getDay() natif   : 0=dim,1=lun,2=mar,3=mer,4=jeu,5=ven,6=sam
+//
+// D'après la console : jours:[0,1,2,3] pour nuit lun→jeu (format UI : 0=lun)
+//                      jours:[5,6] pour WE (format UI : 5=sam, 6=dim)
+//                      jours:[4] pour vendredi (format UI : 4=ven)
+// → Les plages utilisent le format UI de PlanEduc (0=lun...6=dim)
+// → dowIdx() retourne aussi ce format (0=lun...6=dim)
+// Donc pas de conversion nécessaire — les jours plages et dowIdx sont cohérents.
+
 const isNuitP    = p => p.type === 'nuit' || p.debut >= '22:00' || (p.fin <= '07:00' && p.fin > '00:00');
 const isReunion  = p => p.type === 'reunion' || (p.nom||'').toLowerCase().includes('reunion') || (p.nom||'').toLowerCase().includes('réunion');
+// WE = plage dont TOUS les jours sont sam(5) ou dim(6) dans le format UI
 const isWEPlage  = p => p.jours && p.jours.length > 0 && p.jours.every(j => j === 5 || j === 6);
+// Nuit vendredi = nuit non-WE avec vendredi (4 en format UI)
 const isVenNuit  = p => isNuitP(p) && !isReunion(p) && !isWEPlage(p) && (p.jours||[]).includes(4);
-const isNuitSem  = p => isNuitP(p) && !isReunion(p) && !isWEPlage(p) && !isVenNuit(p);
+// Nuit semaine = nuit non-WE, non-vendredi (jours 0-3 = lun→jeu)
+const isNuitSem  = p => isNuitP(p) && !isReunion(p) && !isWEPlage(p) && !isVenNuit(p) && (p.jours||[]).some(j => j >= 0 && j <= 3);
+// Lever = début avant 10h, non-nuit, non-réunion, non-WE
 const isLever    = p => !isNuitP(p) && !isReunion(p) && !isWEPlage(p) && parseInt(p.debut) < 10;
+// Fin de journée = tout le reste (soir + aprem ven)
 const isFinJour  = p => !isNuitP(p) && !isReunion(p) && !isWEPlage(p) && !isLever(p);
 const isWEDay    = d => d.getDay() === 0 || d.getDay() === 6;
 const dowIdx     = d => d.getDay() === 0 ? 6 : d.getDay() - 1;
@@ -398,8 +419,11 @@ async function genMois(moisStr, L) {
       if (!r.ok) return r;
     }
     if (dDim) {
-      if (!(e.jours||[]).includes(dowIdx(dDim))) return { ok:false, r:'Dim non travaillé' };
-      if (isAbsent(e.id, dsDim))                 return { ok:false, r:'Absent dimanche' };
+      // Dim peut être stocké comme 6 (format UI) ou 0 (getDay natif)
+      const joursDim = (e.jours||[]);
+      const dispoDim = joursDim.includes(6) || joursDim.includes(0);
+      if (!dispoDim) return { ok:false, r:'Dim non travaillé' };
+      if (isAbsent(e.id, dsDim)) return { ok:false, r:'Absent dimanche' };
     }
     return { ok:true, r:'' };
   }
@@ -493,13 +517,29 @@ async function genMois(moisStr, L) {
     const reqMin   = +plage.min || 1;
     const cycleKey = `we_${plage.id}`;
 
-    // Éducs éligibles : non exclus ET disponibles sam ET dim
-    const eligibles = educs.filter(e =>
+    // Éducs éligibles : non exclus ET disponibles sam(5) ET dim(6)
+    // Fallback : si dim stocké comme 0 (getDay natif) au lieu de 6
+    let eligibles = educs.filter(e =>
       !(e.excls||[]).includes(plage.id) &&
       (e.jours||[]).includes(5) &&
       (e.jours||[]).includes(6)
-    ).sort((a, b) => {
-      // Tri initial par équité historique du groupe
+    );
+    if (!eligibles.length) {
+      // Essai avec dim=0 (format getDay natif)
+      eligibles = educs.filter(e =>
+        !(e.excls||[]).includes(plage.id) &&
+        (e.jours||[]).includes(5) &&
+        ((e.jours||[]).includes(6) || (e.jours||[]).includes(0))
+      );
+    }
+    if (!eligibles.length) {
+      // Dernier recours : tous ceux qui travaillent au moins le sam
+      eligibles = educs.filter(e =>
+        !(e.excls||[]).includes(plage.id) &&
+        (e.jours||[]).includes(5)
+      );
+    }
+    eligibles = eligibles.sort((a, b) => {
       const gA = (hist[a.id].groupes[g]||0) / Math.max(0.01, ratioE(a));
       const gB = (hist[b.id].groupes[g]||0) / Math.max(0.01, ratioE(b));
       return gA - gB;
