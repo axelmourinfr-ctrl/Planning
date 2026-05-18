@@ -118,12 +118,24 @@ function resetAll(){
   location.reload();
 }
 
+// Clés de cache à vider systématiquement avec les horaires
+const CACHE_KEYS = [
+  'planeduc_v3_patterns',
+  'planeduc_v3_annual',
+  'planeduc_v3_webloc',
+  'planeduc_v3_cycle'
+];
+
 function resetHoraires(){
-  if(!confirm('Supprimer TOUS les horaires generes ?\n(Les educateurs, plages et regles sont conserves)')) return;
+  if(!confirm('Supprimer TOUS les horaires générés et réinitialiser les caches ?\n(Les éducateurs, plages et règles sont conservés)')) return;
+  // Horaires
   Object.keys(localStorage).filter(k=>k.startsWith('planeduc_v3_h_')).forEach(k=>localStorage.removeItem(k));
   localStorage.removeItem('planeduc_v3_mois');
+  // Caches moteur
+  CACHE_KEYS.forEach(k=>localStorage.removeItem(k));
   horaire = {};
   save();
+  alert('Horaires et caches réinitialisés avec succès.');
   location.reload();
 }
 
