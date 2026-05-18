@@ -11,6 +11,7 @@ function getJoursOuvrables(yr, mo){
 }
 
 // Cible heures d'un mois pour un educ : 7.6h x jours ouvrables x ratio contrat
+// On déduit les jours d'absence CP (ils comptent comme travaillés pour la cible)
 function getCibleMois(educ, yr, mo){
   return getJoursOuvrables(yr, mo) * 7.6 * (getTargetH(educ) / 38);
 }
@@ -223,7 +224,6 @@ function renderFiche(){
   const jours   = getDays(yr, mo);
   const plan    = horaire[moisStr] || {};
 
-  // CORRECTION : cible = 7.6h x jours ouvrables réels x ratio contrat
   const targetHMois = getCibleMois(educ, yr, mo);
 
   let totalTrav=0, totalCP=0;
@@ -237,7 +237,6 @@ function renderFiche(){
       return ids.includes(educId);
     });
     const h = myPlages.reduce((s,p)=>s+p.dureeH, 0);
-    // CP : on compte 7.6h x ratio par jour de conge
     if(abs && abs.type==='conge') totalCP += 7.6 * (getTargetH(educ) / 38);
     else totalTrav += h;
 
