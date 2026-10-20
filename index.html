@@ -25,6 +25,7 @@
   <div class="nav-item" onclick="nav(this,'stats')"><span>📊</span> Stats prestations</div>
   <div class="nav-item" onclick="nav(this,'feries')"><span>🎉</span> Jours fériés</div>
   <div class="nav-item" onclick="nav(this,'absences')"><span>🏥</span> Absences</div>
+  <div class="nav-item" onclick="nav(this,'diagnostic')"><span>🔍</span> Diagnostic</div>
   <div class="nav-sec">Données</div>
   <div class="nav-item" onclick="exportData()"><span>💾</span> Exporter JSON</div>
   <div class="nav-item" onclick="document.getElementById('imp').click()"><span>📂</span> Importer JSON</div>
@@ -283,6 +284,12 @@
   <div id="abs-list"><div class="empty"><div class="icon">✅</div><p>Aucune absence.</p></div></div>
 </div>
 
+<!-- ===== DIAGNOSTIC ===== -->
+<div id="page-diagnostic" class="page">
+  <div class="page-title">🔍 Diagnostic génération</div>
+  <div class="empty"><div class="icon">🔍</div><p>Générez un horaire pour voir le diagnostic.</p></div>
+</div>
+
 </main>
 </div>
 
@@ -323,6 +330,16 @@
   <hr>
   <div class="field"><label>Plages préférées</label><div class="chk-group" id="me-prefs"></div></div>
   <div class="field"><label>Plages refusées</label><div class="chk-group" id="me-excls"></div></div>
+  <hr>
+  <div class="field" style="padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px">
+    <label for="me-pause">Accepte les horaires à pause ?</label>
+    <select id="me-pause">
+      <option value="non">Non — une seule prestation terrain par jour</option>
+      <option value="oui">Oui — peut faire matin + soir le même jour (avec coupure)</option>
+    </select>
+    <div style="font-size:.72rem;color:var(--ink3);margin-top:4px">Si « Non », le moteur ne lui attribuera jamais deux prestations terrain le même jour. Une réunion reste possible avant ou après.</div>
+  </div>
+  <div class="field"><label>Notes</label><input id="me-notes" placeholder="Optionnel…"></div>
   <hr>
   <div style="margin-bottom:10px">
     <div style="font-size:.78rem;font-weight:700;color:var(--ink2);margin-bottom:8px">Demandes spéciales (max 2)</div>

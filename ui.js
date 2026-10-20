@@ -38,6 +38,38 @@ function nav(el, page){
   if(page==='stats')    renderStats();
   if(page==='feries')   renderFeries();
   if(page==='absences') renderAbsList();
+  if(page==='diagnostic') renderDiagnostic();
+}
+
+// ── Diagnostic de la dernière génération ──
+function renderDiagnostic(){
+  const el=document.getElementById('page-diagnostic'); if(!el) return;
+  const diag=(window._lastDiagnostic||[]).slice().sort((a,b)=>(a.couverte-b.couverte)||a.ds.localeCompare(b.ds));
+  let html='<div class="page-title">🔍 Diagnostic génération</div>';
+  if(!diag.length){
+    el.innerHTML=html+'<div class="page-sub">Générez un horaire pour voir le diagnostic.</div><div class="empty"><div class="icon">🔍</div><p>Aucun diagnostic disponible.</p></div>';
+    return;
+  }
+  const nonCouv=diag.filter(d=>!d.couverte).length;
+  html+='<div class="page-sub">Pour chaque nuit, week-end, férié et poste difficile : qui a été retenu, et pourquoi les autres ne l\'ont pas été.</div>';
+  html+=nonCouv?'<div class="alert a-warn">⚠️ '+nonCouv+' poste(s) non couvert(s) — à compléter à la main (affichés en premier).</div>'
+               :'<div class="alert a-ok">✅ Tous les postes sont couverts.</div>';
+  diag.forEach(function(d){
+    const jour=new Date(d.ds+'T12:00').toLocaleDateString('fr-BE',{weekday:'short',day:'numeric',month:'short'});
+    html+='<details class="card" style="margin-bottom:8px;padding:12px 16px"'+(d.couverte?'':' open')+'>';
+    html+='<summary style="cursor:pointer;display:flex;align-items:center;gap:10px;font-weight:600;font-size:.85rem">';
+    html+='<span>'+jour+' — '+d.plage+'</span>';
+    html+='<span class="badge '+(d.couverte?'b-green':'b-red')+'" style="margin-left:auto">'+(d.couverte?'Couverte':'Non couverte')+'</span></summary>';
+    html+='<div style="font-size:.78rem;margin-top:8px">';
+    d.details.forEach(function(r){
+      html+='<div style="display:flex;align-items:center;gap:8px;padding:3px 0;border-bottom:1px solid var(--border)">';
+      html+='<div class="avatar" style="background:'+r.color+';width:24px;height:24px;font-size:.6rem">'+r.ini+'</div>';
+      html+='<span style="font-weight:600;min-width:110px">'+r.nom+'</span>';
+      html+='<span style="color:'+(r.ok?'var(--green)':'var(--ink3)')+'">'+(r.ok?'✅ Assigné':'— '+r.raison)+'</span></div>';
+    });
+    html+='</div></details>';
+  });
+  el.innerHTML=html;
 }
 
 // ── Onglets internes ──
@@ -109,7 +141,7 @@ function resetEducForm(){
   if(g('me-contrat')) g('me-contrat').value='temps-plein';
   if(g('me-heures'))  g('me-heures').value='';
   if(g('me-h-field')) g('me-h-field').style.display='none';
-  const pEl=document.getElementById('me-pause'); if(pEl) pEl.checked=false;
+  const pEl=document.getElementById('me-pause'); if(pEl) pEl.value='non';
   document.querySelectorAll('#me-jours-grp .chk-pill').forEach((p,i)=>{
     const cb = p.querySelector('input');
     cb.checked = [0,1,2,3,4].includes(i);
@@ -148,8 +180,8 @@ function openEditEduc(id){
   document.getElementById('me-heures').value = e.heuresPerso||'';
   document.getElementById('me-h-field').style.display = e.contrat==='perso' ? '' : 'none';
   const pauseEl = document.getElementById('me-pause');
-  if(pauseEl) pauseEl.checked = e.acceptePause||false;
-  document.getElementById('me-notes').value = e.notes||'';
+  if(pauseEl) pauseEl.value = e.acceptePause ? 'oui' : 'non';
+  const notesEl = document.getElementById('me-notes'); if(notesEl) notesEl.value = e.notes||'';
   document.querySelectorAll('#me-jours-grp .chk-pill').forEach(p=>{
     const cb = p.querySelector('input');
     cb.checked = (e.jours||[]).includes(+cb.value);
@@ -171,7 +203,7 @@ function saveEduc(){
   const contrat     = g2('me-contrat') ? g2('me-contrat').value : 'temps-plein';
   const heuresPerso = g2('me-heures')  ? (+g2('me-heures').value || null) : null;
   const pauseEl2    = g2('me-pause');
-  const acceptePause= pauseEl2 ? pauseEl2.checked : false;
+  const acceptePause= pauseEl2 ? (pauseEl2.value==='oui' || pauseEl2.checked===true) : false;
   const notes       = g2('me-notes')   ? g2('me-notes').value.trim() : '';
   const editId      = g2('me-id')      ? (+g2('me-id').value || null) : null;
 
@@ -236,7 +268,7 @@ function renderEducGrid(){
           <button class="btn btn-red btn-sm" onclick="delEduc(${e.id})">🗑️</button>
         </div>
       </div>
-      <div class="educ-tags">${prefs}${excls}${demandesHtml}</div>
+      <div class="educ-tags">${e.acceptePause?'<span class="badge b-purple">⏸ Horaires à pause OK</span>':''}${prefs}${excls}${demandesHtml}</div>
       ${e.notes?`<div style="font-size:.72rem;color:var(--ink3);margin-top:6px;font-style:italic">"${e.notes}"</div>`:''}
     </div>`;
   }).join('');

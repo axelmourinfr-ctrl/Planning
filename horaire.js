@@ -11,7 +11,6 @@ function getJoursOuvrables(yr, mo){
 }
 
 // Cible heures d'un mois pour un educ : 7.6h x jours ouvrables x ratio contrat
-// On déduit les jours d'absence CP (ils comptent comme travaillés pour la cible)
 function getCibleMois(educ, yr, mo){
   return getJoursOuvrables(yr, mo) * 7.6 * (getTargetH(educ) / 38);
 }
@@ -224,6 +223,7 @@ function renderFiche(){
   const jours   = getDays(yr, mo);
   const plan    = horaire[moisStr] || {};
 
+  // CORRECTION : cible = 7.6h x jours ouvrables réels x ratio contrat
   const targetHMois = getCibleMois(educ, yr, mo);
 
   let totalTrav=0, totalCP=0;
@@ -237,8 +237,11 @@ function renderFiche(){
       return ids.includes(educId);
     });
     const h = myPlages.reduce((s,p)=>s+p.dureeH, 0);
-    if(abs && abs.type==='conge') totalCP += 7.6 * (getTargetH(educ) / 38);
-    else totalTrav += h;
+    // CP : on compte 7.6h x ratio par jour de conge
+    // Congé, maladie, formation : 7.6h x ratio crédités, uniquement les jours ouvrables
+    const ouvrable = d.getDay()>=1 && d.getDay()<=5 && !isFerie(ds);
+    if(abs && ['conge','maladie','formation'].includes(abs.type) && ouvrable) totalCP += 7.6 * (getTargetH(educ) / 38);
+    totalTrav += h;
 
     const plageChips = abs
       ? `<span class="plage-tag" style="background:var(--orange-l);color:var(--orange)">${abs.type==='conge'?'🌴 CP':abs.type==='maladie'?'🤒 Mal.':'🔄 Récup.'}</span>`
@@ -268,7 +271,7 @@ function renderFiche(){
         </div>
         <div style="margin-left:auto;display:flex;gap:20px;flex-wrap:wrap;text-align:center">
           <div><div style="font-family:'Syne',sans-serif;font-size:1.4rem;font-weight:800;color:var(--green)">${totalTrav.toFixed(1)}h</div><div style="font-size:.7rem;color:var(--ink3)">Travaillées</div></div>
-          <div><div style="font-family:'Syne',sans-serif;font-size:1.4rem;font-weight:800;color:var(--orange)">${totalCP.toFixed(1)}h</div><div style="font-size:.7rem;color:var(--ink3)">CP</div></div>
+          <div><div style="font-family:'Syne',sans-serif;font-size:1.4rem;font-weight:800;color:var(--orange)">${totalCP.toFixed(1)}h</div><div style="font-size:.7rem;color:var(--ink3)">CP / abs. payées</div></div>
           <div><div style="font-family:'Syne',sans-serif;font-size:1.4rem;font-weight:800;color:var(--blue)">${targetHMois.toFixed(1)}h</div><div style="font-size:.7rem;color:var(--ink3)">Cible mois</div></div>
           <div><div style="font-family:'Syne',sans-serif;font-size:1.4rem;font-weight:800;color:${Math.abs(solde)<=15?'var(--green)':solde>0?'var(--orange)':'var(--red)'}">${solde>=0?'+':''}${solde.toFixed(1)}h</div><div style="font-size:.7rem;color:var(--ink3)">Solde</div></div>
         </div>
@@ -276,7 +279,7 @@ function renderFiche(){
     </div>
     <div class="card">
       <div class="sch-wrap"><table class="sheet-table">
-        <thead><tr><th>Jour</th><th>Prestations</th><th>H. trav.</th><th>CP</th><th>Récup</th></tr></thead>
+        <thead><tr><th>Jour</th><th>Prestations</th><th>H. trav.</th><th>CP / Abs.</th><th>Récup</th></tr></thead>
         <tbody>${rows}</tbody>
         <tfoot><tr class="sheet-total">
           <td colspan="2" style="text-align:left;padding:8px">TOTAL ${monthLabel(moisStr)}</td>
