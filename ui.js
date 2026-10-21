@@ -1,5 +1,5 @@
 // ============================================================
-// ui.js - Interface utilisateur : navigation, formulaires, modals
+// ui.js - Interface utilisateur : navigation, formulaires, modals — PlanEduc Pro v25
 // ============================================================
 
 // ── Initialisation ──
@@ -84,6 +84,10 @@ function itab(el, id){
 
 // ── Pills (cases à cocher stylisées) ──
 function togglePill(el){
+  // Bloque le clic natif du <label> pour que la case ne soit pas basculée deux fois
+  const ev = window.event;
+  if(ev && ev.target && ev.target.tagName==='INPUT'){ el.classList.toggle('on', ev.target.checked); return; }
+  if(ev && ev.preventDefault) ev.preventDefault();
   const cb = el.querySelector('input[type=checkbox]');
   if(!cb) return;
   cb.checked = !cb.checked;
@@ -318,7 +322,7 @@ function renderPlageList(){
       <div class="plage-dot" style="background:${p.color}"></div>
       <div class="plage-info">
         <div class="plage-name">${p.nom} ${p.tous?'<span class="badge b-orange">Tous requis</span>':''}</div>
-        <div class="plage-detail">${p.debut} → ${p.fin} - ${p.dureeH.toFixed(1)}h - min ${p.min} éduc - ${jours}</div>
+        <div class="plage-detail">${p.debut} → ${p.fin} - ${(p.dureeH||dureeH(p)).toFixed(1)}h - min ${p.min} éduc - ${jours}</div>
       </div>
       <button class="btn btn-red btn-sm" onclick="delPlage(${p.id})">Suppr.</button>
     </div>`;

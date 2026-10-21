@@ -1,8 +1,14 @@
 // ============================================================
-// algo.js - PlanEduc Pro - Moteur v23
+// algo.js - PlanEduc Pro - Moteur v25
 // ============================================================
 // UN SEUL COUT, PAS DE SCORES QUI SE CONTREDISENT.
 //
+// 0. TOURNANTES (posées en premier, jamais cassées ensuite) :
+//    - nuits jeudi + vendredi : un seul éducateur par semaine,
+//      pas de réunion pour lui le vendredi, pas de WE cette semaine
+//    - week-ends : chaque plage samedi+dimanche aux mêmes personnes
+//    Ordre : moins de blocs faits (proratisé au contrat), puis tour
+//    le plus ancien, puis ordre de la liste des éducateurs.
 // 1. CONSTRUCTION jour par jour : chaque poste est donné à
 //    l'éducateur dont le coût augmente le moins.
 // 2. REEQUILIBRAGE : transferts, échanges, ajout/retrait (entre min
@@ -33,9 +39,11 @@
 
 // ── Réglages du moteur (ajustables) ──
 const CFG={
-  hA:0.15, hB:1.5, hBand:5, hMonth:25,
-  tw:{matin:1.2,aprem:1.0,soir:1.6,nuit:3.0,journee:1.0,samJ:2.0,samN:2.5,dimJ:2.0,dimN:2.5,ferie:1.5},
-  rec7:30, rec14:16, recJour:6,
+  hA:0.5, hB:1.5, hBand:3, hMonth:25,
+  tw:{matin:1.0,aprem:1.0,soir:1.0,nuit:2.0,journee:1.0,samJ:1.5,samN:1.5,dimJ:1.5,dimN:1.5,ferie:1.5},
+  twMois:{matin:6,aprem:5,soir:6,nuit:8,journee:3,samJ:0,samN:0,dimJ:0,dimN:0,ferie:1},
+  twPlage:5,
+  rec7:14, rec14:8, recJour:2,
   cutWE:30, altWE:12, maxWE:35,
   nuit3:12, cons5:4, pauseDouble:2,
   prefPlage:3, demande:8, excl:150,
@@ -61,6 +69,7 @@ function typeCat(p){
   if(isReunion(p)) return 'reunion';
   if(isNuitP(p)) return 'nuit';
   if(p.type==='matin'||p.type==='aprem'||p.type==='soir'||p.type==='journee') return p.type;
+  if(dureeH(p)>=8) return 'journee';
   const h=parseInt(p.debut); return h<10?'matin':h<14?'aprem':'soir';
 }
 function typePlage(p){ return typeCat(p); }
@@ -82,6 +91,7 @@ function creditHeuresAbs(e,yr,mo){
 function heuresDues(e,yr,mo){ return joursOuvMois(yr,mo)*7.6*ratioE(e); }
 
 function dnOf(ds){ return Math.round(Date.UTC(+ds.slice(0,4),+ds.slice(5,7)-1,+ds.slice(8,10))/DAY_MS); }
+function dsOfDn(dn){ const d=new Date(dn*DAY_MS); return d.getUTCFullYear()+'-'+String(d.getUTCMonth()+1).padStart(2,'0')+'-'+String(d.getUTCDate()).padStart(2,'0'); }
 function dowOfDn(dn){ return ((dn+3)%7+7)%7; }        // 0 = lundi
 function weekOfDn(dn){ return Math.floor((dn+3)/7); } // semaine lundi→dimanche
 function hmMs(t){ const [h,m]=t.split(':').map(Number); return h*HOUR_MS+m*60000; }
@@ -103,12 +113,13 @@ function bumpInto(c,sh,sg){
   c.h+=sg*sh.h;
   if(!sh.terrain) return;
   c[sh.cat]+=sg;
+  c.pl[sh.pid]=(c.pl[sh.pid]||0)+sg;
   const dow=dowOfDn(sh.dn);
   if(dow===5){ if(sh.night)c.samN+=sg; else c.samJ+=sg; }
   else if(dow===6){ if(sh.night)c.dimN+=sg; else c.dimJ+=sg; }
   if(sh.ferie) c.ferie+=sg;
 }
-function newCnt(){ const c={h:0}; KEYS.forEach(k=>c[k]=0); return c; }
+function newCnt(){ const c={h:0,pl:{}}; KEYS.forEach(k=>c[k]=0); return c; }
 
 // Règle active → sa valeur ; règle désactivée → "off" ; absente → défaut
 function ruleVal(type,def,off){
@@ -178,8 +189,8 @@ async function genMois(moisStr,L,opts){
   const TOLH=opts.tol||(tolEl&&+tolEl.value)||15;
   const lockedSlots=getLockedSlots(moisStr);
   const planning={}, warnings=[], diagnostic=[];
-  const S={},CNT={},HISTC={},OBJ={},DUE={},CRED={},HSOLDE={},ELIG={},MEANS={};
-  const TW=CFG.tw;
+  const S={},CNT={},HISTC={},OBJ={},DUE={},CRED={},HSOLDE={},ELIG={},MEANS={},MEANSM={},MEANSP={},ELIGP={};
+  const TW=CFG.tw, TWM=CFG.twMois;
 
   educs.forEach(e=>{ S[e.id]=[]; CNT[e.id]=newCnt(); HISTC[e.id]=newCnt(); HSOLDE[e.id]=0; });
 
@@ -236,14 +247,27 @@ async function genMois(moisStr,L,opts){
     ELIG[e.id]={matin:can('matin'),aprem:can('aprem'),soir:can('soir'),journee:can('journee'),
       nuit:can('nuit'),samJ:j.includes(5),dimJ:j.includes(6),samN:j.includes(5)&&can('nuit'),
       dimN:j.includes(6)&&can('nuit'),ferie:true};
+    ELIGP[e.id]={}; plages.forEach(p=>{ if(!isReunion(p)&&!p.tous) ELIGP[e.id][p.id]=!ex.includes(p.id)&&(p.jours||[]).some(d=>j.includes(d)); });
   });
 
   function calcMeans(){
     KEYS.forEach(k=>{
-      let s=0,n=0;
-      educs.forEach(e=>{ if(!ELIG[e.id][k]) return; s+=(HISTC[e.id][k]+CNT[e.id][k])/Math.max(0.01,ratioE(e)); n++; });
-      MEANS[k]=n?s/n:0;
+      let s=0,sm=0,n=0;
+      educs.forEach(e=>{ if(!ELIG[e.id][k]) return; const r=Math.max(0.01,ratioE(e)); s+=(HISTC[e.id][k]+CNT[e.id][k])/r; sm+=CNT[e.id][k]/r; n++; });
+      MEANS[k]=n?s/n:0; MEANSM[k]=n?sm/n:0;
     });
+    plages.forEach(p=>{
+      if(isReunion(p)||p.tous) return;
+      let s=0,n=0; educs.forEach(e=>{ if(!ELIGP[e.id][p.id]) return; s+=(CNT[e.id].pl[p.id]||0)/Math.max(0.01,ratioE(e)); n++; });
+      MEANSP[p.id]=n?s/n:0;
+    });
+  }
+  function eqCore(id,re){
+    const c=CNT[id],hc=HISTC[id],el=ELIG[id],ep=ELIGP[id]; let cost=0;
+    for(let i=0;i<KEYS.length;i++){ const k=KEYS[i]; if(!el[k]) continue;
+      const d=(hc[k]+c[k])/re-MEANS[k], dm=c[k]/re-MEANSM[k]; cost+=TW[k]*d*d+TWM[k]*dm*dm; }
+    for(const pid in MEANSP){ if(!ep[pid]) continue; const d=(c.pl[pid]||0)/re-MEANSP[pid]; cost+=CFG.twPlage*d*d; }
+    return cost;
   }
 
   // ================================================================
@@ -259,6 +283,8 @@ async function genMois(moisStr,L,opts){
     for(let i=0;i<arr.length;i++){
       const o=arr[i];
       if(o.dn===sh.dn&&o.pid===sh.pid) return 'Déjà assigné';
+      if(sh.reun&&o.night&&(o.dn===sh.dn-1||o.dn===sh.dn)) return 'De nuit (pas de réunion)';
+      if(o.reun&&sh.night&&(sh.dn===o.dn-1||sh.dn===o.dn)) return 'Réunion ce jour-là';
       if(weekOfDn(o.dn)===wk){ hWeek+=o.h; if(o.terrain) wDays.add(o.dn); }
       if(o.terrain){ tDns.add(o.dn); if(o.night) nDns.add(o.dn); }
       const overlap=o.s<sh.e&&sh.s<o.e?Math.min(o.e,sh.e)-Math.max(o.s,sh.s):0;
@@ -308,7 +334,7 @@ async function genMois(moisStr,L,opts){
       const m=c.h+CRED[id]-DUE[id], ex2=Math.max(0,Math.abs(m)-(TOLH-3)); cost+=CFG.hMonth*ex2*ex2;
       const cu=HSOLDE[id]+m, ex3=Math.max(0,Math.abs(cu)-(TOLH-6)); cost+=CFG.hMonth*ex3*ex3;
     }
-    for(let i=0;i<KEYS.length;i++){ const k=KEYS[i]; if(!el[k]) continue; const d=(hc[k]+c[k])/re-MEANS[k]; cost+=TW[k]*d*d; }
+    cost+=eqCore(id,re);
 
     const byDn=new Map();
     for(let i=0;i<arr.length;i++){ const o=arr[i]; if(!o.terrain) continue; let st=byDn.get(o.dn); if(!st){st=[];byDn.set(o.dn,st);} st.push(o.pid); }
@@ -357,11 +383,23 @@ async function genMois(moisStr,L,opts){
     return s;
   }
   // Conventions (relâchées progressivement si la couverture l'exige)
+  // Heures de réunions "tous" encore à venir ce mois (réservées dans le plafond)
+  const REUN=[];
+  dsList.forEach(ds=>plagesDuJour(ds).forEach(p=>{ if(p.tous) REUN.push({ds,dn:dnOf(ds),h:dureeH(p)}); }));
+  function reuRest(e,dn){
+    let h=0;
+    for(const r of REUN){
+      if(r.dn===dn||!(e.jours||[]).includes(dowOfDn(r.dn))||isAbsent(e.id,r.ds)) continue;
+      if(S[e.id].some(o=>o.reun&&o.dn===r.dn)) continue; // déjà comptée
+      h+=r.h;
+    }
+    return h;
+  }
   function convWhy(e,sh,lvl){
     if(sh.reun) return '';
     if(lvl<2&&(e.excls||[]).includes(sh.pid)) return 'Plage refusée';
     const cap=Math.min(TOLH,TOLH-3+lvl*3);
-    const mois=CNT[e.id].h+sh.h+CRED[e.id]-DUE[e.id], cumul=HSOLDE[e.id]+mois;
+    const mois=CNT[e.id].h+sh.h+reuRest(e,sh.dn)+CRED[e.id]-DUE[e.id], cumul=HSOLDE[e.id]+mois;
     if(mois>cap||cumul>cap) return `Heures (+${Math.max(mois,cumul).toFixed(0)}h)`;
     if(lvl<1&&dowOfDn(sh.dn)>=5){ const w=weCountCur(e); if(!w.has(weekOfDn(sh.dn))&&w.size>=LIM.maxWE) return 'Max WE/mois'; }
     return '';
@@ -373,6 +411,119 @@ async function genMois(moisStr,L,opts){
   }
   function assign(e,ds,p){ applyAdd(e,mkShift(ds,p,true)); (planning[ds][p.id]||(planning[ds][p.id]=[])).push(e.id); }
   function slotIds(ds,pid){ return ((planning[ds]||{})[pid]||[]).map(Number); }
+
+  // ================================================================
+  // ETAPE 0 : BLOCS EN TOURNANTE
+  //  - nuits jeudi + vendredi : 1 éducateur par semaine
+  //  - week-end : chaque plage sam+dim aux mêmes personnes
+  //  Ordre : moins de blocs (proratisé au contrat), puis tour le
+  //  plus ancien, puis ordre de la liste. Cycle complet garanti.
+  // ================================================================
+  const blockKeys=new Set();
+  const ROT={};
+  educs.forEach(e=>ROT[e.id]={jv:0,lastJV:-1e9,we:0,weN:0,weJ:0,lastWE:-1e9,jvWeeks:new Set(),weWeeks:new Set(),pl:{},plLast:{},plWeeks:{}});
+  const plKey=p=>p.id; // la plage du samedi identifie la prestation de week-end
+  {
+    const keys12=Object.keys(horaire).filter(k=>k<moisStr&&k>=moisKey(yr,mo-12)).sort();
+    keys12.forEach(key=>{
+      const plan=horaire[key]; if(!plan) return;
+      Object.keys(plan).forEach(ds=>{
+        if(ds.length!==10) return;
+        const dn=dnOf(ds), dow=dowOfDn(dn), wk=weekOfDn(dn);
+        plages.forEach(p=>{
+          const ids=plan[ds][p.id]; if(!Array.isArray(ids)||isReunion(p)) return;
+          const night=isNuitP(p);
+          ids.forEach(x=>{ const r=ROT[+x]; if(!r) return;
+            if(night&&(dow===3||dow===4)&&!r.jvWeeks.has(wk)){ r.jvWeeks.add(wk); r.jv++; r.lastJV=Math.max(r.lastJV,wk); }
+            if(dow>=5){
+              if(!r.weWeeks.has(wk)){ r.weWeeks.add(wk); r.we++; r.lastWE=Math.max(r.lastWE,wk); if(night) r.weN++; else r.weJ++; }
+              const k=plKey(p); if(!r.plWeeks[k]) r.plWeeks[k]=new Set();
+              if(!r.plWeeks[k].has(wk)){ r.plWeeks[k].add(wk); r.pl[k]=(r.pl[k]||0)+1; r.plLast[k]=Math.max(r.plLast[k]||-1e9,wk); }
+            }
+          });
+        });
+      });
+    });
+  }
+  const prevPlanB=horaire[moisKey(yr,mo-1)]||{};
+  function pairPlages(d1,d2,filt,loose){
+    const inM=dn=>dn>=MD0&&dn<=MD1;
+    const ds1=dsOfDn(d1), ds2=dsOfDn(d2);
+    const list=dn=>{ const ds=dsOfDn(dn); return inM(dn)?plagesDuJour(ds).filter(filt):plages.filter(q=>filt(q)&&(q.jours||[]).includes(dowOfDn(dn))); };
+    const A=list(d1), B=list(d2), out=[];
+    A.forEach(p=>{
+      const q=B.find(x=>x.id===p.id)||B.find(x=>typeCat(x)===typeCat(p)&&x.debut===p.debut)||(loose&&A.length===1&&B.length===1?B[0]:null);
+      if(!q) return;
+      const slots=[]; let prevIds=null;
+      if(inM(d1)) slots.push({ds:ds1,p}); else if(prevPlanB[ds1]&&Array.isArray(prevPlanB[ds1][p.id])) prevIds=prevPlanB[ds1][p.id].map(Number);
+      if(inM(d2)) slots.push({ds:ds2,p:q});
+      const phantom=(!inM(d2)&&d2>MD1)?{ds:ds2,p:q}:null; // jour du mois suivant : réservé
+      if(!slots.length||slots.some(s2=>lockedSlots[s2.ds]&&lockedSlots[s2.ds][s2.p.id])) return;
+      out.push({slots,prevIds,phantom,count:Math.max(...slots.map(s2=>Math.max(0,+s2.p.min||0)))});
+    });
+    return out;
+  }
+  function tryBlock(e,shs,lvl){
+    const done=[]; let why='';
+    for(const sh of shs){
+      why=legalAdd(e,sh,true)||convWhy(e,sh,lvl);
+      if(why) break;
+      applyAdd(e,sh); done.push(sh);
+    }
+    done.forEach(sh=>applyRemove(e,sh));
+    return why;
+  }
+  function assignBlock(blk,kind,wk){
+    const shs=blk.slots.map(s2=>mkShift(s2.ds,s2.p,true));
+    if(blk.phantom) shs.push(mkShift(blk.phantom.ds,blk.phantom.p,false));
+    const chosen=[]; const reasons={};
+    const night=shs[0].night;
+    const blocked=e=>kind==='we'?ROT[e.id].jvWeeks.has(wk):ROT[e.id].weWeeks.has(wk);
+    if(blk.prevIds) blk.prevIds.forEach(id=>{ const e=educById(id); if(e&&chosen.length<blk.count&&!tryBlock(e,shs,1)) chosen.push(e); });
+    for(let lvl=0;lvl<3&&chosen.length<blk.count;lvl++){
+      const c=educs.filter(e=>{
+        if(chosen.includes(e)) return false;
+        if(blocked(e)){ reasons[e.id]=kind==='we'?'Fait les nuits jeu+ven cette semaine':'Fait le week-end'; return false; }
+        const w=tryBlock(e,shs,lvl); if(w){ if(!lvl) reasons[e.id]=w; return false; } return true;
+      });
+      const r=e=>ROT[e.id], re=e=>Math.max(0.01,ratioE(e));
+      const pk=plKey(blk.slots[0].p);
+      const key=kind==='jv'
+        ? e=>[r(e).jv/re(e), r(e).lastJV]
+        : e=>[(r(e).pl[pk]||0)/re(e), r(e).weWeeks.has(wk-1)?1:0, r(e).we/re(e), r(e).plLast[pk]||-1e9];
+      c.sort((a,b)=>{ const ka=key(a),kb=key(b); for(let i=0;i<ka.length;i++){ if(Math.abs(ka[i]-kb[i])>1e-9) return ka[i]-kb[i]; } return educs.indexOf(a)-educs.indexOf(b); });
+      c.slice(0,blk.count-chosen.length).forEach(e=>chosen.push(e));
+    }
+    chosen.forEach(e=>{
+      blk.slots.forEach(s2=>{ if(!planning[s2.ds]) planning[s2.ds]={}; assign(e,s2.ds,s2.p); });
+      if(blk.phantom) applyAdd(e,mkShift(blk.phantom.ds,blk.phantom.p,false));
+      const R=ROT[e.id];
+      if(kind==='jv'&&!R.jvWeeks.has(wk)){ R.jvWeeks.add(wk); R.jv++; R.lastJV=wk; }
+      if(kind==='we'&&!R.weWeeks.has(wk)){ R.weWeeks.add(wk); R.we++; R.lastWE=wk; if(night) R.weN++; else R.weJ++; }
+      if(kind==='we'){ const k=plKey(blk.slots[0].p); if(!R.plWeeks[k]) R.plWeeks[k]=new Set(); if(!R.plWeeks[k].has(wk)){ R.plWeeks[k].add(wk); R.pl[k]=(R.pl[k]||0)+1; R.plLast[k]=wk; } }
+    });
+    blk.slots.forEach(s2=>blockKeys.add(s2.ds+'|'+s2.p.id));
+    const nomBloc=(kind==='jv'?'Nuits jeu+ven':'Week-end')+' — '+blk.slots[0].p.nom+' (tournante)';
+    diagnostic.push({ds:blk.slots[0].ds,plage:nomBloc,couverte:chosen.length>=blk.count,
+      details:educs.map(e=>chosen.includes(e)?row(e,true,'Son tour'):row(e,false,reasons[e.id]||'Pas son tour'))});
+    if(chosen.length<blk.count) warnings.push(`${blk.slots[0].ds} - ${nomBloc}: bloc incomplet (${chosen.length}/${blk.count}), complété jour par jour`);
+  }
+  const row=(e,ok,raison)=>({nom:e.prenom+' '+e.nom,ini:(e.prenom[0]+e.nom[0]).toUpperCase(),color:e.color||'#888',ok,raison});
+  L('Tournantes : nuits jeudi+vendredi et week-ends...',10); await sl(10);
+  dsList.forEach(ds=>{ if(!planning[ds]) planning[ds]={}; });
+  if(lockedSlots) Object.entries(lockedSlots).forEach(([ds,sl2])=>Object.entries(sl2).forEach(([pid,ids])=>{
+    const p=plageById(+pid); if(!p||!planning[ds]) return;
+    planning[ds][pid]=[]; planning[ds]['_lock_'+pid]='locked';
+    ids.forEach(x=>{ const e=educById(+x); if(e) assign(e,ds,p); });
+  }));
+  const wks=[...new Set(dsList.map(ds=>weekOfDn(dnOf(ds))))].sort((a,b)=>a-b);
+  const isNightPl=q=>!isReunion(q)&&isNuitP(q), isTerrain=q=>!isReunion(q)&&!q.tous;
+  wks.forEach(wk=>{
+    pairPlages(wk*7,wk*7+1,isNightPl,true).forEach(b=>assignBlock(b,'jv',wk));
+    const weB=pairPlages(wk*7+2,wk*7+3,isTerrain);
+    weB.sort((a,b)=>(b.slots[0].p&&isNuitP(b.slots[0].p))-(a.slots[0].p&&isNuitP(a.slots[0].p)));
+    weB.forEach(b=>assignBlock(b,'we',wk));
+  });
 
   // ── Bilan de charge ──
   let demande=0;
@@ -388,19 +539,12 @@ async function genMois(moisStr,L,opts){
   // ================================================================
   L('Construction des semaines...',15); await sl(20);
   let cum=0;
-  const row=(e,ok,raison)=>({nom:e.prenom+' '+e.nom,ini:(e.prenom[0]+e.nom[0]).toUpperCase(),color:e.color||'#888',ok,raison});
-
   for(let di=0;di<dsList.length;di++){
     const ds=dsList[di], dn=dnOf(ds), dow=dowOfDn(dn), ferie=isFerie(ds);
-    planning[ds]={};
+    if(!planning[ds]) planning[ds]={};
     const frac=(cum+0.5*demDay[di])/demTot; cum+=demDay[di];
     if(di%4===0){ L(`Jour ${di+1}/${dsList.length}`,15+Math.round(di/dsList.length*40)); await sl(0); }
 
-    if(lockedSlots[ds]) Object.entries(lockedSlots[ds]).forEach(([pid,ids])=>{
-      const p=plageById(+pid); if(!p) return;
-      planning[ds][pid]=[]; planning[ds]['_lock_'+pid]='locked';
-      ids.forEach(x=>{ const e=educById(+x); if(e) assign(e,ds,p); });
-    });
 
     const todays=plagesDuJour(ds).filter(p=>!(lockedSlots[ds]&&lockedSlots[ds][p.id]));
     const scarce=new Map();
@@ -408,6 +552,7 @@ async function genMois(moisStr,L,opts){
     todays.sort((a,b)=>(isReunion(a)-isReunion(b))||(scarce.get(a.id)-scarce.get(b.id)));
 
     for(const p of todays){
+      if(blockKeys.has(ds+'|'+p.id)) continue;
       const sh=mkShift(ds,p,true), reqMin=Math.max(0,+p.min||0);
       if(!planning[ds][p.id]) planning[ds][p.id]=[];
       if(p.tous){
@@ -439,6 +584,18 @@ async function genMois(moisStr,L,opts){
         cands.slice(0,need).forEach(x=>assign(x.e,ds,p));
         if(cands.length&&lvl>relax) relax=lvl;
       }
+      // Places au-dessus du minimum : seulement pour qui est en retard sur son rythme d'heures
+      const reqMax=Math.max(reqMin,+p.max||reqMin);
+      if(!isReunion(p)&&slotIds(ds,p.id).length>=reqMin&&slotIds(ds,p.id).length<reqMax){
+        const taken=new Set(slotIds(ds,p.id)), extra=[];
+        for(const e of educs){
+          if(taken.has(e.id)||legalAdd(e,sh,true)||convWhy(e,sh,0)) continue;
+          if(CNT[e.id].h+sh.h>OBJ[e.id]*frac+2) continue;
+          const base=costE(e,frac); applyAdd(e,sh); const c=costE(e,frac)-base; applyRemove(e,sh);
+          if(c<-2) extra.push({e,c});
+        }
+        extra.sort((x,y)=>x.c-y.c||x.e.id-y.e.id).slice(0,reqMax-taken.size).forEach(x=>assign(x.e,ds,p));
+      }
       const got=slotIds(ds,p.id);
       if(got.length<reqMin||sh.night||dow>=5||ferie||relax>0){
         const det=educs.map(e=>{
@@ -456,14 +613,17 @@ async function genMois(moisStr,L,opts){
   L('Rééquilibrage des heures et des prestations...',58); await sl(20);
   const slots=[];
   dsList.forEach(ds=>plagesDuJour(ds).forEach(p=>{
-    if(isReunion(p)||p.tous||(lockedSlots[ds]&&lockedSlots[ds][p.id])) return;
+    if(isReunion(p)||p.tous||(lockedSlots[ds]&&lockedSlots[ds][p.id])||blockKeys.has(ds+'|'+p.id)) return;
     const mn=Math.max(0,+p.min||0);
     slots.push({ds,p,sh:mkShift(ds,p,true),min:mn,max:Math.max(mn,+p.max||mn)});
   }));
+  function hPart(e){
+    const id=e.id,c=CNT[id], dev=c.h-OBJ[id], ex=Math.max(0,Math.abs(dev)-CFG.hBand);
+    const m=c.h+CRED[id]-DUE[id], ex2=Math.max(0,Math.abs(m)-(TOLH-3)), ex3=Math.max(0,Math.abs(HSOLDE[id]+m)-(TOLH-6));
+    return CFG.hA*dev*dev+CFG.hB*ex*ex+CFG.hMonth*(ex2*ex2+ex3*ex3);
+  }
   function eqPart(e){
-    const id=e.id,c=CNT[id],hc=HISTC[id],re=Math.max(0.01,ratioE(e)),el=ELIG[id]; let s=0;
-    for(const k of KEYS){ if(!el[k]) continue; const d=(hc[k]+c[k])/re-MEANS[k]; s+=TW[k]*d*d; }
-    return s;
+    return eqCore(e.id,Math.max(0.01,ratioE(e)));
   }
   const t0=Date.now(); let nMoves=0;
   for(let sweep=0;sweep<CFG.maxSweeps&&Date.now()-t0<CFG.timeBudget;sweep++){
@@ -499,13 +659,13 @@ async function genMois(moisStr,L,opts){
       const A=educs[i],B=educs[j];
       for(const sa of holds[A.id]) for(const sb of holds[B.id]){
         const a=sa.sh,b=sb.sh;
-        if(a===b||Math.abs(a.h-b.h)>2) continue;
+        if(a===b||Math.abs(a.h-b.h)>3) continue;
         if(a.cat===b.cat&&dowOfDn(a.dn)<5&&dowOfDn(b.dn)<5) continue;
         if(slotIds(sa.ds,sa.p.id).includes(B.id)||slotIds(sb.ds,sb.p.id).includes(A.id)) continue;
         if((A.excls||[]).includes(b.pid)||(B.excls||[]).includes(a.pid)) continue;
-        const e0=eqPart(A)+eqPart(B);
+        const e0=eqPart(A)+eqPart(B)+hPart(A)+hPart(B);
         bumpInto(CNT[A.id],a,-1);bumpInto(CNT[A.id],b,1);bumpInto(CNT[B.id],b,-1);bumpInto(CNT[B.id],a,1);
-        const e1=eqPart(A)+eqPart(B);
+        const e1=eqPart(A)+eqPart(B)+hPart(A)+hPart(B);
         bumpInto(CNT[A.id],b,-1);bumpInto(CNT[A.id],a,1);bumpInto(CNT[B.id],a,-1);bumpInto(CNT[B.id],b,1);
         if(e1-e0>-1) continue;
         applyRemove(A,a); applyRemove(B,b);
@@ -586,6 +746,7 @@ async function genMois(moisStr,L,opts){
     return {id:e.id,nom:e.prenom+' '+e.nom,heures:c.h,dues:DUE[e.id],credit:CRED[e.id],mois,cumul:HSOLDE[e.id]+mois,coupes:cu};
   });
 
+  if(opts.hook) opts.hook({S,CNT,OBJ,HSOLDE,legalAdd,costE,convWhy,calcMeans,shift:(ds,pid)=>mkShift(ds,plageById(pid),true)});
   return {planning,warnings,diagnostic,bilan,
     charge:{demande,capacite},
     recurrence:recTot?recOK/recTot:1, coupes:cuts, ajustements:nMoves};
